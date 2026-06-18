@@ -270,6 +270,62 @@ async def delete_app(access_token: str, app: dict, client: httpx.AsyncClient):
         print(f"❌ Failed to delete {app['name']} (ID: {app['id']}): {e}")
 
 
+def _auth_headers(access_token: str | None) -> dict[str, str]:
+    """Build auth + CSRF headers for a console API request."""
+    headers: dict[str, str] = {}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+    if _csrf_token:
+        headers["X-CSRF-Token"] = _csrf_token
+    return headers
+
+
+async def list_tags(
+    access_token: str | None, client: httpx.AsyncClient, tag_type: str = "app"
+) -> list[dict]:
+    """List all tags of a given type (e.g. 'app'). Returns dicts with id, name, type."""
+    resp = await client.get(
+        f"{BASE_URL}/tags", params={"type": tag_type}, headers=_auth_headers(access_token)
+    )
+    resp.raise_for_status()
+    return resp.json() if resp.content else []
+
+
+async def create_tag(
+    access_token: str | None, client: httpx.AsyncClient, name: str, tag_type: str = "app"
+) -> dict:
+    """Create a new tag and return it (dict with id, name, type)."""
+    resp = await client.post(
+        f"{BASE_URL}/tags",
+        json={"name": name, "type": tag_type},
+        headers=_auth_headers(access_token),
+    )
+    if resp.status_code not in (200, 201):
+        raise Exception(f"Failed to create tag '{name}': {resp.status_code} - {resp.text[:200]}")
+    return resp.json()
+
+
+async def bind_tags(
+    access_token: str | None,
+    client: httpx.AsyncClient,
+    tag_ids: list[str],
+    target_id: str,
+    tag_type: str = "app",
+) -> None:
+    """Bind one or more existing tags to a target (e.g. an app). Additive; never unbinds."""
+    if not tag_ids:
+        return
+    resp = await client.post(
+        f"{BASE_URL}/tag-bindings/create",
+        json={"tag_ids": tag_ids, "target_id": target_id, "type": tag_type},
+        headers=_auth_headers(access_token),
+    )
+    if resp.status_code not in (200, 201, 204):
+        raise Exception(
+            f"Failed to bind tags {tag_ids} to {target_id}: {resp.status_code} - {resp.text[:200]}"
+        )
+
+
 async def export_app(access_token: str | None, app_id: str, client: httpx.AsyncClient) -> bytes:
     """
     Export the app's DSL data as a bytes.

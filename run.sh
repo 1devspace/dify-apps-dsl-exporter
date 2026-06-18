@@ -10,6 +10,8 @@
 #                          #   ARGS: --dry-run, --no-slack
 #   ./run.sh prune [ARGS]  # delete workflows marked "Delete" in the tracker + notify Slack
 #                          #   ARGS: --yes (required to actually delete), --no-slack
+#   ./run.sh tags [ARGS]   # copy env tags (prod/dev/test) from the tracker into Dify
+#                          #   ARGS: --dry-run
 set -euo pipefail
 
 # Resolve the directory this script lives in, so it works from anywhere.
@@ -35,9 +37,12 @@ case "$CMD" in
   prune)
     exec "$PYTHON" "src/prune_deleted.py" "$@"
     ;;
+  tags)
+    exec "$PYTHON" "src/sync_env_tags.py" "$@"
+    ;;
   *)
     echo "Unknown command: $CMD" >&2
-    echo "Usage: ./run.sh [export|import|delete|sync|prune] [args...]" >&2
+    echo "Usage: ./run.sh [export|import|delete|sync|prune|tags] [args...]" >&2
     exit 1
     ;;
 esac
