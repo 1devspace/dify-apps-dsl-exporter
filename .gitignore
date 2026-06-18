@@ -180,4 +180,7 @@ dify-vipplay-workflows/
 # trashcan: archived YAML for workflows deleted via prune
 *-trashcan/
 dify-pelonis-trashcan/
+# readable: Markdown reports generated from DSL by `./run.sh readable`
+*-readable/
+dify-pelonis-readable/
 *.pdf

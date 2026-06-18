@@ -245,6 +245,73 @@ The trashcan folder defaults to a sibling of `DSL_FOLDER_PATH` (e.g.
 
 This is intentionally a manual step and is NOT part of the weekly schedule.
 
+## Web app (console UI)
+
+In addition to the CLI, the project ships a small web app: a **FastAPI** backend
+(`src/api`) that wraps the existing modules, and a **Next.js** frontend (`frontend/`).
+It lets the team trigger the actions (sync / env tags / export / prune) from the
+browser and watch them run live, plus a governance dashboard of every workflow
+(author, env tags, decision, pending/missing-env status) sourced live from Dify +
+Confluence.
+
+- **Auth**: log in with your existing Dify credentials. Your Dify workspace role is
+  resolved automatically; destructive actions (prune) require an `owner`/`admin` role.
+- **Jobs**: actions run one-at-a-time on the backend (they share the Confluence page,
+  so they must not overlap) with their logs streamed to the UI. Prune always offers a
+  dry-run preview and requires typing `DELETE` to confirm.
+
+### Run it locally
+
+```bash
+# one-time: install backend + frontend deps
+./venv/bin/pip install -e . || ./venv/bin/pip install fastapi "uvicorn[standard]" itsdangerous
+(cd frontend && npm install)
+
+# start both (backend on :8008, frontend on :3000)
+./dev.sh
+# then open http://localhost:3000
+```
+
+Or run the two processes separately:
+
+```bash
+./run.sh serve                 # backend only (uvicorn, :8008, --reload)
+(cd frontend && npm run dev)    # frontend only (:3000)
+```
+
+Add `SESSION_SECRET` (and optionally `ADMIN_ROLES` / `ADMIN_EMAILS`) to `.env` —
+see `.env.example`. All Dify/Confluence/Slack operations run as the service account
+configured in `.env`; the per-user login only controls access and role gating.
+
+Not yet included (planned later phases): persistent job history, in-app workflow
+health/analysis, and live Dify execution/runtime monitoring.
+
+## Readable Markdown reports
+
+Dify DSL exports are built for the Dify editor, not for humans: node IDs are opaque
+timestamps, the graph is a flat list of nodes + edges, and variable references look like
+`{{#1752536193945.topic#}}`. The `readable` command turns each DSL into a Markdown report
+that is easy to read and review:
+
+- app header (name, mode, description) and a node-type summary,
+- a **Mermaid flowchart** of the graph (renders on GitHub / Confluence / VS Code), with
+  iterations and loops shown as subgraphs,
+- a node-by-node breakdown showing the meaningful config per node type (LLM model + prompts,
+  code, HTTP method/URL/body, if-else conditions, tool + parameters, iteration selectors, ...),
+- every opaque node ID rewritten to the node's **title**, so a reference reads
+  `{{Topic+subprompt.topic}}` instead of `{{#1752536193945.topic#}}`. References that cannot
+  be resolved are left raw on purpose, which surfaces broken references in the original flow.
+
+```bash
+./run.sh readable                       # convert every workflow in DSL_FOLDER_PATH
+./run.sh readable path/to/flow.yml      # convert a single file
+./run.sh readable some/dir --out docs   # convert a folder into ./docs
+```
+
+Reports are written to `./dify-pelonis-readable/` (override with `READABLE_FOLDER_PATH` or
+`--out`), one `.md` per workflow plus a `README.md` index. Because the reports embed the same
+prompts/code as the DSL, the output folder is gitignored by default.
+
 ### Scheduled runs (GitHub Actions)
 
 `.github/workflows/sync-tracker.yml` runs the sync **weekly (Mondays 08:00 UTC)** and

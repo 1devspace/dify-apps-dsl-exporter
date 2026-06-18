@@ -12,6 +12,10 @@
 #                          #   ARGS: --yes (required to actually delete), --no-slack
 #   ./run.sh tags [ARGS]   # copy env tags (prod/dev/test) from the tracker into Dify
 #                          #   ARGS: --dry-run
+#   ./run.sh readable [ARGS] # convert DSL workflows into readable Markdown reports
+#                          #   ARGS: [files/dirs...] --out DIR
+#   ./run.sh serve [ARGS]  # run the FastAPI backend (web app API) with uvicorn
+#                          #   ARGS: passed to uvicorn (default: --reload --port 8008)
 set -euo pipefail
 
 # Resolve the directory this script lives in, so it works from anywhere.
@@ -40,9 +44,18 @@ case "$CMD" in
   tags)
     exec "$PYTHON" "src/sync_env_tags.py" "$@"
     ;;
+  readable)
+    exec "$PYTHON" "src/dsl_readable.py" "$@"
+    ;;
+  serve)
+    if [[ $# -eq 0 ]]; then
+      set -- --reload --port 8008
+    fi
+    exec "$PYTHON" -m uvicorn api.app:app --app-dir src "$@"
+    ;;
   *)
     echo "Unknown command: $CMD" >&2
-    echo "Usage: ./run.sh [export|import|delete|sync|prune|tags] [args...]" >&2
+    echo "Usage: ./run.sh [export|import|delete|sync|prune|tags|readable|serve] [args...]" >&2
     exit 1
     ;;
 esac
