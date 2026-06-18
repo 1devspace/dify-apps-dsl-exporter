@@ -6,9 +6,29 @@ import { api, ApiError, Dashboard, Job, User, WorkflowRecord } from "@/lib/api";
 import JobDrawer from "@/components/JobDrawer";
 import PruneModal from "@/components/PruneModal";
 
-type Filter = "all" | "pending" | "missing_env" | "marked_delete" | "removed";
+type StatusFilter = "pending" | "missing_env" | "marked_delete" | "removed";
+
+const STATUS_FILTERS: [StatusFilter, string][] = [
+  ["pending", "Pending"],
+  ["missing_env", "Missing env"],
+  ["marked_delete", "Marked delete"],
+  ["removed", "Removed"],
+];
 
 const ENV_TAGS = ["prod", "dev", "test"];
+
+function matchesStatus(r: WorkflowRecord, f: StatusFilter): boolean {
+  switch (f) {
+    case "pending":
+      return r.live_in_dify && !r.informations_added;
+    case "missing_env":
+      return r.live_in_dify && r.missing_env_tag;
+    case "marked_delete":
+      return r.live_in_dify && r.decision.trim().toLowerCase() === "delete";
+    case "removed":
+      return r.removed_from_dify;
+  }
+}
 
 function envBadges(tags: string) {
   const tokens = tags
@@ -26,8 +46,16 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
-  const [showRemoved, setShowRemoved] = useState(false);
+  const [active, setActive] = useState<Set<StatusFilter>>(new Set());
+
+  function toggleFilter(f: StatusFilter) {
+    setActive((prev) => {
+      const next = new Set(prev);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      return next;
+    });
+  }
   const [activeJob, setActiveJob] = useState<string | null>(null);
   const [showPrune, setShowPrune] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -103,21 +131,14 @@ export default function DashboardPage() {
     const q = query.trim().toLowerCase();
     return records.filter((r) => {
       if (q && !`${r.name} ${r.author} ${r.tags}`.toLowerCase().includes(q)) return false;
-      switch (filter) {
-        case "pending":
-          return r.live_in_dify && !r.informations_added;
-        case "missing_env":
-          return r.live_in_dify && r.missing_env_tag;
-        case "marked_delete":
-          return r.live_in_dify && r.decision.trim().toLowerCase() === "delete";
-        case "removed":
-          return r.removed_from_dify;
-        default:
-          // "All" hides workflows no longer in Dify unless the toggle is on.
-          return showRemoved ? true : !r.removed_from_dify;
-      }
+      // No filters selected: show everything still live in Dify (removed are
+      // available via the Removed chip).
+      if (active.size === 0) return !r.removed_from_dify;
+      // Otherwise show the union of the selected filters.
+      for (const f of active) if (matchesStatus(r, f)) return true;
+      return false;
     });
-  }, [records, query, filter, showRemoved]);
+  }, [records, query, active]);
 
   const s = data?.summary;
 
@@ -214,18 +235,22 @@ export default function DashboardPage() {
             placeholder="Search name, author, tag…"
             className="w-64 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
           />
-          {([
-            ["all", "All"],
-            ["pending", "Pending"],
-            ["missing_env", "Missing env"],
-            ["marked_delete", "Marked delete"],
-            ["removed", "Removed"],
-          ] as [Filter, string][]).map(([f, label]) => (
+          <button
+            onClick={() => setActive(new Set())}
+            className={`rounded-full px-3 py-1 text-sm transition ${
+              active.size === 0
+                ? "bg-brand text-white"
+                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            All
+          </button>
+          {STATUS_FILTERS.map(([f, label]) => (
             <button
               key={f}
-              onClick={() => setFilter(f)}
+              onClick={() => toggleFilter(f)}
               className={`rounded-full px-3 py-1 text-sm transition ${
-                filter === f
+                active.has(f)
                   ? "bg-brand text-white"
                   : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
               }`}
@@ -233,17 +258,7 @@ export default function DashboardPage() {
               {label}
             </button>
           ))}
-          <label className="ml-auto flex cursor-pointer items-center gap-2 text-sm text-slate-500">
-            <input
-              type="checkbox"
-              checked={showRemoved || filter === "removed"}
-              disabled={filter === "removed"}
-              onChange={(e) => setShowRemoved(e.target.checked)}
-              className="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand"
-            />
-            Show removed{s ? ` (${s.removed_from_dify})` : ""}
-          </label>
-          <span className="text-sm text-slate-400">{filtered.length} shown</span>
+          <span className="ml-auto text-sm text-slate-400">{filtered.length} shown</span>
         </div>
 
         {/* Table */}
