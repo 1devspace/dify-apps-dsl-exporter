@@ -27,6 +27,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [showRemoved, setShowRemoved] = useState(false);
   const [activeJob, setActiveJob] = useState<string | null>(null);
   const [showPrune, setShowPrune] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -112,10 +113,11 @@ export default function DashboardPage() {
         case "removed":
           return r.removed_from_dify;
         default:
-          return true;
+          // "All" hides workflows no longer in Dify unless the toggle is on.
+          return showRemoved ? true : !r.removed_from_dify;
       }
     });
-  }, [records, query, filter]);
+  }, [records, query, filter, showRemoved]);
 
   const s = data?.summary;
 
@@ -231,7 +233,17 @@ export default function DashboardPage() {
               {label}
             </button>
           ))}
-          <span className="ml-auto text-sm text-slate-400">{filtered.length} shown</span>
+          <label className="ml-auto flex cursor-pointer items-center gap-2 text-sm text-slate-500">
+            <input
+              type="checkbox"
+              checked={showRemoved || filter === "removed"}
+              disabled={filter === "removed"}
+              onChange={(e) => setShowRemoved(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand"
+            />
+            Show removed{s ? ` (${s.removed_from_dify})` : ""}
+          </label>
+          <span className="text-sm text-slate-400">{filtered.length} shown</span>
         </div>
 
         {/* Table */}
