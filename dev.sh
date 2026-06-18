@@ -49,6 +49,13 @@ if [[ ! -d frontend/node_modules ]]; then
   (cd frontend && npm install)
 fi
 
+# A leftover production build (`next build`) in .next corrupts `next dev`
+# ("Cannot find module './NNN.js'"). Drop it before starting the dev server.
+if [[ -f frontend/.next/BUILD_ID ]]; then
+  echo "Removing stale production build in frontend/.next ..."
+  rm -rf frontend/.next
+fi
+
 echo "Starting Next.js frontend on :${FRONTEND_PORT} ..."
 (cd frontend && npm run dev -- -p "$FRONTEND_PORT") &
 FRONTEND_PID=$!
