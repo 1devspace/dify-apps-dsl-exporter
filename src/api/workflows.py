@@ -6,17 +6,29 @@ plus summary counts.
 """
 
 import asyncio
+import re
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends
+import yaml
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
 
 import confluence
 import dify_api
+import dsl_readable
 import sync_tracker
-from api.auth import require_auth
+from api.auth import require_admin, require_auth
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+
+ENV_TAGS = {"prod", "dev", "test"}
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "workflow").strip())
+    return cleaned or "workflow"
 
 
 def _build_dashboard() -> dict:
@@ -95,3 +107,79 @@ def _build_dashboard() -> dict:
 async def list_workflows(user: dict = Depends(require_auth)) -> dict:
     # Run the blocking client work off the event loop.
     return await asyncio.to_thread(_build_dashboard)
+
+
+class EnvTagsBody(BaseModel):
+    tags: list[str]
+
+
+@router.post("/{app_id}/env-tags")
+async def add_env_tags(app_id: str, body: EnvTagsBody, user: dict = Depends(require_auth)) -> dict:
+    """Bind one or more environment tags (prod/dev/test) to a Dify app.
+
+    Additive only (matches sync_env_tags): never unbinds existing tags. Missing
+    global tags are created automatically.
+    """
+    wanted = {t.strip().lower() for t in body.tags if t.strip()} & ENV_TAGS
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Provide at least one of: prod, dev, test")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        token = await dify_api.login_and_get_token(client)
+        name_to_id = {t["name"].lower(): t["id"] for t in await dify_api.list_tags(token, client)}
+        ids: list[str] = []
+        for name in sorted(wanted):
+            if name not in name_to_id:
+                created = await dify_api.create_tag(token, client, name)
+                name_to_id[name] = created["id"]
+            ids.append(name_to_id[name])
+        await dify_api.bind_tags(token, client, ids, app_id)
+    return {"ok": True, "added": sorted(wanted)}
+
+
+@router.delete("/{app_id}")
+async def delete_workflow(app_id: str, user: dict = Depends(require_admin)) -> dict:
+    """Delete a single workflow from Dify (admin only).
+
+    Unlike prune, this does not archive a YAML backup or flag the tracker; the
+    next sync will mark the row "Removed from Dify".
+    """
+    async with httpx.AsyncClient(timeout=60) as client:
+        token = await dify_api.login_and_get_token(client)
+        await dify_api.execute_api(
+            client, f"{dify_api.BASE_URL}/apps/{app_id}", access_token=token, method_type="DELETE"
+        )
+    return {"ok": True}
+
+
+@router.get("/{app_id}/export")
+async def export_workflow(
+    app_id: str, name: str | None = None, user: dict = Depends(require_auth)
+) -> Response:
+    """Download a single workflow's DSL as a YAML file."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        token = await dify_api.login_and_get_token(client)
+        data = await dify_api.export_app(token, app_id, client)
+    filename = f"{_safe_filename(name or app_id)}.yml"
+    return Response(
+        content=data,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{app_id}/readable")
+async def readable_workflow(
+    app_id: str, name: str | None = None, user: dict = Depends(require_auth)
+) -> dict:
+    """Return a human-readable Markdown (with a Mermaid graph) for a workflow."""
+    async with httpx.AsyncClient(timeout=120) as client:
+        token = await dify_api.login_and_get_token(client)
+        data = await dify_api.export_app(token, app_id, client)
+    try:
+        dsl = yaml.safe_load(data)
+    except yaml.YAMLError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not parse DSL: {exc}")
+    blocks = dsl_readable.build_blocks(dsl, source_name=name or app_id)
+    markdown = dsl_readable.blocks_to_markdown(blocks)
+    return {"markdown": markdown}

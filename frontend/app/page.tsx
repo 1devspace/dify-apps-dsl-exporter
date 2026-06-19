@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, ApiError, Dashboard, Job, User, WorkflowRecord } from "@/lib/api";
 import JobDrawer from "@/components/JobDrawer";
 import PruneModal from "@/components/PruneModal";
+import ReadableDrawer, { ReadableTarget } from "@/components/ReadableDrawer";
 
 type StatusFilter = "pending" | "missing_env" | "marked_delete" | "removed";
 
@@ -59,6 +60,7 @@ export default function DashboardPage() {
   const [activeJob, setActiveJob] = useState<string | null>(null);
   const [showPrune, setShowPrune] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [readableTarget, setReadableTarget] = useState<ReadableTarget | null>(null);
 
   const loadData = useCallback(async () => {
     setRefreshing(true);
@@ -276,7 +278,14 @@ export default function DashboardPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((r) => (
-                <Row key={r.app_id} r={r} />
+                <Row
+                  key={r.app_id}
+                  r={r}
+                  isAdmin={!!user?.is_admin}
+                  onReadable={setReadableTarget}
+                  onChanged={loadData}
+                  onError={setError}
+                />
               ))}
               {filtered.length === 0 && (
                 <tr>
@@ -290,6 +299,7 @@ export default function DashboardPage() {
         </div>
       </main>
 
+      <ReadableDrawer target={readableTarget} onClose={() => setReadableTarget(null)} />
       <JobDrawer jobId={activeJob} onClose={() => setActiveJob(null)} onFinished={onJobFinished} />
       {showPrune && (
         <PruneModal
@@ -348,8 +358,49 @@ function ActionButton({
   );
 }
 
-function Row({ r }: { r: WorkflowRecord }) {
+function Row({
+  r,
+  isAdmin,
+  onReadable,
+  onChanged,
+  onError,
+}: {
+  r: WorkflowRecord;
+  isAdmin: boolean;
+  onReadable: (t: ReadableTarget) => void;
+  onChanged: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
   const envs = envBadges(r.tags);
+  const missingEnvs = ENV_TAGS.filter((e) => !envs.includes(e));
+  const canEdit = r.live_in_dify;
+
+  async function addEnv(env: string) {
+    setBusy(true);
+    try {
+      await api.addEnvTags(r.app_id, [env]);
+      onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Failed to add tag");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Delete "${r.name}" from Dify? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await api.deleteWorkflow(r.app_id);
+      onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Failed to delete");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <tr className="hover:bg-slate-50">
       <td className="px-4 py-3">
@@ -358,19 +409,29 @@ function Row({ r }: { r: WorkflowRecord }) {
           <span className="text-xs text-blue-600">new — not yet on tracker</span>
         )}
       </td>
-      <td className="px-4 py-3 text-slate-600">{r.author || <span className="text-slate-300">—</span>}</td>
+      <td className="px-4 py-3 text-slate-600">
+        {r.author || <span className="text-slate-300">—</span>}
+      </td>
       <td className="px-4 py-3">
-        {envs.length ? (
-          <div className="flex gap-1">
-            {envs.map((e) => (
-              <span key={e} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                {e}
-              </span>
+        <div className="flex flex-wrap items-center gap-1">
+          {envs.map((e) => (
+            <span key={e} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              {e}
+            </span>
+          ))}
+          {canEdit &&
+            missingEnvs.map((e) => (
+              <button
+                key={e}
+                onClick={() => addEnv(e)}
+                disabled={busy}
+                title={`Tag this workflow as ${e} in Dify`}
+                className="rounded border border-dashed border-slate-300 px-1.5 py-0.5 text-xs text-slate-400 hover:border-brand hover:text-brand disabled:opacity-50"
+              >
+                + {e}
+              </button>
             ))}
-          </div>
-        ) : (
-          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">missing</span>
-        )}
+        </div>
       </td>
       <td className="px-4 py-3">
         {r.decision ? (
@@ -396,12 +457,39 @@ function Row({ r }: { r: WorkflowRecord }) {
           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">pending</span>
         )}
       </td>
-      <td className="px-4 py-3 text-right">
-        {r.url && (
-          <a href={r.url} target="_blank" rel="noreferrer" className="text-brand hover:underline">
-            Open
-          </a>
-        )}
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-end gap-3 whitespace-nowrap text-sm">
+          {canEdit && (
+            <>
+              <button
+                onClick={() => onReadable({ app_id: r.app_id, name: r.name })}
+                className="text-slate-500 hover:text-brand"
+              >
+                Doc
+              </button>
+              <a
+                href={api.exportUrl(r.app_id, r.name)}
+                className="text-slate-500 hover:text-brand"
+              >
+                YAML
+              </a>
+            </>
+          )}
+          {r.url && (
+            <a href={r.url} target="_blank" rel="noreferrer" className="text-brand hover:underline">
+              Open
+            </a>
+          )}
+          {isAdmin && canEdit && (
+            <button
+              onClick={remove}
+              disabled={busy}
+              className="text-red-500 hover:text-red-700 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );
