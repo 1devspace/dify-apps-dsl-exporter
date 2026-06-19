@@ -81,9 +81,13 @@ def update_page(
     storage_body: str,
     current_version: int,
     message: str,
+    parent_id: str | None = None,
 ) -> dict:
-    """Replace a page's body, incrementing its version number."""
-    _require_config()
+    """Replace a page's body, incrementing its version number.
+
+    Pass parent_id to also re-parent the page (move it under a different page/folder).
+    """
+    _require_base_auth()
     url = f"{CONFLUENCE_BASE_URL}/api/v2/pages/{page_id}"
     payload = {
         "id": str(page_id),
@@ -92,6 +96,8 @@ def update_page(
         "body": {"representation": "storage", "value": storage_body},
         "version": {"number": current_version + 1, "message": message},
     }
+    if parent_id is not None:
+        payload["parentId"] = str(parent_id)
     resp = client.put(
         url,
         json=payload,
@@ -103,6 +109,162 @@ def update_page(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+def _require_base_auth() -> None:
+    """Lighter check for operations that don't need CONFLUENCE_PAGE_ID."""
+    missing = [
+        name
+        for name, value in (
+            ("CONFLUENCE_BASE_URL", CONFLUENCE_BASE_URL),
+            ("CONFLUENCE_EMAIL", CONFLUENCE_EMAIL),
+            ("CONFLUENCE_API_TOKEN", CONFLUENCE_API_TOKEN),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Missing Confluence configuration: " + ", ".join(missing) + ". Set them in .env."
+        )
+
+
+def _json_headers() -> dict[str, str]:
+    return {
+        "Authorization": _auth_header(),
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def get_space_id(client: httpx.Client, space_key: str) -> str:
+    """Resolve a space key (e.g. 'SIC') to its numeric space id."""
+    _require_base_auth()
+    resp = client.get(
+        f"{CONFLUENCE_BASE_URL}/api/v2/spaces",
+        params={"keys": space_key},
+        headers={"Authorization": _auth_header(), "Accept": "application/json"},
+    )
+    resp.raise_for_status()
+    results = resp.json().get("results", [])
+    if not results:
+        raise RuntimeError(f"No Confluence space found with key '{space_key}'.")
+    return results[0]["id"]
+
+
+def list_folder_children(client: httpx.Client, folder_id: str) -> list[dict]:
+    """List direct children (pages) of a folder: dicts with id, title, type."""
+    _require_base_auth()
+    children: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params = {"limit": 250}
+        if cursor:
+            params["cursor"] = cursor
+        resp = client.get(
+            f"{CONFLUENCE_BASE_URL}/api/v2/folders/{folder_id}/direct-children",
+            params=params,
+            headers={"Authorization": _auth_header(), "Accept": "application/json"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        children.extend(body.get("results", []))
+        cursor = (body.get("_links", {}) or {}).get("next")
+        if not cursor:
+            break
+        # `next` is a full path with a cursor query param; extract just the cursor.
+        match = re.search(r"[?&]cursor=([^&]+)", cursor)
+        cursor = match.group(1) if match else None
+        if not cursor:
+            break
+    return children
+
+
+def list_page_children(client: httpx.Client, page_id: str) -> list[dict]:
+    """List direct child pages of a page: dicts with id, title, status."""
+    _require_base_auth()
+    children: list[dict] = []
+    cursor: str | None = None
+    while True:
+        params = {"limit": 250}
+        if cursor:
+            params["cursor"] = cursor
+        resp = client.get(
+            f"{CONFLUENCE_BASE_URL}/api/v2/pages/{page_id}/children",
+            params=params,
+            headers={"Authorization": _auth_header(), "Accept": "application/json"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        children.extend(body.get("results", []))
+        nxt = (body.get("_links", {}) or {}).get("next")
+        match = re.search(r"[?&]cursor=([^&]+)", nxt) if nxt else None
+        cursor = match.group(1) if match else None
+        if not cursor:
+            break
+    return children
+
+
+def create_page(
+    client: httpx.Client, space_id: str, parent_id: str, title: str, storage_body: str
+) -> dict:
+    """Create a new page under a parent (page or folder) and return the API response."""
+    _require_base_auth()
+    payload = {
+        "spaceId": str(space_id),
+        "status": "current",
+        "title": title,
+        "parentId": str(parent_id),
+        "body": {"representation": "storage", "value": storage_body},
+    }
+    resp = client.post(
+        f"{CONFLUENCE_BASE_URL}/api/v2/pages", json=payload, headers=_json_headers()
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def upload_attachment(
+    client: httpx.Client,
+    page_id: str,
+    filename: str,
+    content: bytes,
+    content_type: str,
+) -> dict:
+    """Attach (or update) a file on a page. Idempotent: re-uploading the same
+    filename creates a new version instead of failing."""
+    _require_base_auth()
+    base = f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/attachment"
+    headers = {"Authorization": _auth_header(), "X-Atlassian-Token": "nocheck"}
+
+    # Does an attachment with this name already exist?
+    existing = client.get(
+        base,
+        params={"filename": filename},
+        headers={"Authorization": _auth_header(), "Accept": "application/json"},
+    )
+    existing.raise_for_status()
+    results = existing.json().get("results", [])
+
+    files = {"file": (filename, content, content_type)}
+    data = {"minorEdit": "true", "comment": "Generated by DSL readable converter"}
+    if results:
+        att_id = results[0]["id"]
+        url = f"{base}/{att_id}/data"
+    else:
+        url = base
+    resp = client.post(url, files=files, data=data, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def image_macro(filename: str, width: int | None = 760) -> str:
+    """Render an attached image (by filename) in storage format."""
+    width_attr = f' ac:width="{width}"' if width else ""
+    return (
+        f'<ac:image ac:align="center"{width_attr}>'
+        f'<ri:attachment ri:filename="{html.escape(filename)}" />'
+        "</ac:image>"
+    )
 
 
 def status_macro(title: str, colour: str) -> str:

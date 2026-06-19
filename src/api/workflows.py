@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 import confluence
 import dify_api
-import dsl_readable
 import sync_tracker
 from api.auth import require_admin, require_auth
 
@@ -180,6 +179,8 @@ async def readable_workflow(
         dsl = yaml.safe_load(data)
     except yaml.YAMLError as exc:
         raise HTTPException(status_code=502, detail=f"Could not parse DSL: {exc}")
+    import dsl_readable  # lazy: heavy module, only needed for this endpoint
+
     blocks = dsl_readable.build_blocks(dsl, source_name=name or app_id)
     markdown = dsl_readable.blocks_to_markdown(blocks)
     return {"markdown": markdown}
