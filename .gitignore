@@ -184,3 +184,6 @@ dify-pelonis-trashcan/
 *-readable/
 dify-pelonis-readable/
 *.pdf
+
+# Runtime settings written by the web app's Settings tab (contains secrets)
+data/settings.json

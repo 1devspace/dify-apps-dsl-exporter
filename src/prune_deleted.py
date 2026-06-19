@@ -114,10 +114,14 @@ def run(confirm: bool = False, notify: bool = True) -> dict:
     print(f"  {len(dify_ids)} apps found.")
 
     page_id = confluence.CONFLUENCE_PAGE_ID
-    page_url = f"{confluence.CONFLUENCE_BASE_URL}/pages/{page_id}"
     with httpx.Client(timeout=60) as client:
         print("Reading Confluence page...")
         page = confluence.get_page(client, page_id)
+    page_url = (
+        f"{confluence.CONFLUENCE_BASE_URL}{page['webui']}"
+        if page.get("webui")
+        else f"{confluence.CONFLUENCE_BASE_URL}/pages/{page_id}"
+    )
     targets = find_delete_marked(page["storage"], dify_ids)
 
     print(f"Workflows marked 'Delete' and still live in Dify: {len(targets)}")

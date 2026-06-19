@@ -312,6 +312,52 @@ Reports are written to `./dify-pelonis-readable/` (override with `READABLE_FOLDE
 `--out`), one `.md` per workflow plus a `README.md` index. Because the reports embed the same
 prompts/code as the DSL, the output folder is gitignored by default.
 
+### Publishing to Confluence
+
+`--output confluence` creates/updates one Confluence page per workflow (plus an index page)
+inside a target folder, instead of writing local Markdown. The Markdown is rendered to
+Confluence storage format: code and prompts become collapsible code macros.
+
+Confluence has no native Mermaid support, so the flow diagram is **rendered to an image via
+[Kroki](https://kroki.io)** and uploaded as a page attachment (shown inline), with the Mermaid
+source kept in a collapsible block for editing. Use `--diagrams code` to skip image rendering
+and embed the raw Mermaid source as a code block instead.
+
+```bash
+./run.sh readable --output confluence                       # all workflows -> default folder
+./run.sh readable --output confluence --space SIC --parent-id 423952430
+./run.sh readable --output confluence --diagrams code        # no image rendering
+```
+
+By default diagrams are rendered by the public `kroki.io`. For privacy (diagram text never
+leaves your network) or speed, run Kroki locally and point `KROKI_URL` at it. Mermaid needs
+Kroki's companion service, so start both:
+
+```bash
+docker run -d --name kroki-mermaid yuzutech/kroki-mermaid
+docker run -d --name kroki -p 8000:8000 --link kroki-mermaid \
+  -e KROKI_MERMAID_HOST=kroki-mermaid yuzutech/kroki
+KROKI_URL=http://localhost:8000 ./run.sh readable --output confluence
+```
+
+Diagram rendering is configurable via `KROKI_URL`, `KROKI_FORMAT` (`svg` default, or `png`),
+and `KROKI_TIMEOUT` (seconds; a slow render falls back to a Mermaid code block).
+
+- An **index page** ("Dify Workflows — Index") is created under the
+  **"Dify workflows documentation"** folder (`SIC` space, id `423952430` by default; override
+  with `--parent-id` / `--space` or the `CONFLUENCE_DOCS_PARENT_ID` / `CONFLUENCE_DOCS_SPACE`
+  env vars), and each **workflow doc is a sub-page of that index**.
+- The index lists **every** doc page (not just the ones in the current run), so publishing a
+  single workflow refreshes its page without shrinking the index.
+- Each doc page includes an **"Open in Dify"** link to the live workflow (resolved from the
+  Dify app list; requires reaching the Dify console, otherwise the link is skipped). A
+  `confluence_links.md` mapping is also written to the output folder.
+- Runs are **idempotent**: a page is matched by title and updated in place, so re-running
+  refreshes the docs rather than creating duplicates. Workflows that share an app name are
+  disambiguated by appending the source filename.
+- Uses the same `CONFLUENCE_BASE_URL` / `CONFLUENCE_EMAIL` / `CONFLUENCE_API_TOKEN` credentials
+  as the tracker sync.
+
 ### Scheduled runs (GitHub Actions)
 
 `.github/workflows/sync-tracker.yml` runs the sync **weekly (Mondays 08:00 UTC)** and

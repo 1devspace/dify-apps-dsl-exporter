@@ -20,6 +20,12 @@ load_dotenv()
 
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
+
+def refresh() -> None:
+    """Re-read the Slack webhook from the environment (used by the Settings tab)."""
+    global SLACK_WEBHOOK_URL
+    SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+
 # Map tracker contributor names (lowercased) to Slack member IDs so the message
 # can @-mention people. Extend/override via the SLACK_USER_MAP env var (JSON like
 # {"name": "U012ABC"}). Names not found here are shown as plain text.

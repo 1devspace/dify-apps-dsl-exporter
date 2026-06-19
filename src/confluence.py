@@ -21,10 +21,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CONFLUENCE_BASE_URL = os.getenv("CONFLUENCE_BASE_URL", "").rstrip("/")
-CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL")
-CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
-CONFLUENCE_PAGE_ID = os.getenv("CONFLUENCE_PAGE_ID")
+
+def _load_config() -> None:
+    global CONFLUENCE_BASE_URL, CONFLUENCE_EMAIL, CONFLUENCE_API_TOKEN, CONFLUENCE_PAGE_ID
+    CONFLUENCE_BASE_URL = os.getenv("CONFLUENCE_BASE_URL", "").rstrip("/")
+    CONFLUENCE_EMAIL = os.getenv("CONFLUENCE_EMAIL")
+    CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
+    CONFLUENCE_PAGE_ID = os.getenv("CONFLUENCE_PAGE_ID")
+
+
+_load_config()
+
+
+def refresh() -> None:
+    """Re-read Confluence config from the environment (used by the Settings tab)."""
+    _load_config()
 
 # Status lozenge colours (Confluence storage uses capitalised colour names).
 COLOUR_GREEN = "Green"
@@ -71,7 +82,23 @@ def get_page(client: httpx.Client, page_id: str) -> dict:
         "title": data["title"],
         "version": data["version"]["number"],
         "storage": data["body"]["storage"]["value"],
+        "webui": (data.get("_links", {}) or {}).get("webui", ""),
     }
+
+
+def page_web_url(page_id: str, space_key: str | None = None) -> str:
+    """Browser URL for a page. Uses the API's webui link (space-aware), which the
+    bare /pages/{id} form is not, so the link actually resolves."""
+    try:
+        with httpx.Client(timeout=30) as client:
+            webui = get_page(client, page_id).get("webui")
+        if webui:
+            return f"{CONFLUENCE_BASE_URL}{webui}"
+    except Exception:  # noqa: BLE001 - fall back to a best-effort URL
+        pass
+    if space_key:
+        return f"{CONFLUENCE_BASE_URL}/spaces/{space_key}/pages/{page_id}"
+    return f"{CONFLUENCE_BASE_URL}/pages/{page_id}"
 
 
 def update_page(

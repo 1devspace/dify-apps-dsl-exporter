@@ -12,8 +12,9 @@
 #                          #   ARGS: --yes (required to actually delete), --no-slack
 #   ./run.sh tags [ARGS]   # copy env tags (prod/dev/test) from the tracker into Dify
 #                          #   ARGS: --dry-run
-#   ./run.sh readable [ARGS] # convert DSL workflows into readable Markdown reports
-#                          #   ARGS: [files/dirs...] --out DIR
+#   ./run.sh readable [ARGS] # convert DSL workflows into readable reports
+#                          #   ARGS: [files/dirs...] --output local|confluence
+#                          #         --out DIR (local) | --parent-id ID --space KEY (confluence)
 #   ./run.sh serve [ARGS]  # run the FastAPI backend (web app API) with uvicorn
 #                          #   ARGS: passed to uvicorn (default: --reload --port 8008)
 set -euo pipefail

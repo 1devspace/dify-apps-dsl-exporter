@@ -24,11 +24,18 @@ from dotenv import load_dotenv
 
 load_dotenv(SRC_DIR.parent / ".env")
 
+# Overlay any settings saved from the UI onto the environment *before* the CLI
+# modules (confluence, dify_api, ...) are imported, since they cache config at
+# import time.
+import app_settings
+
+app_settings.apply_to_env()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from api import auth, jobs, workflows
+from api import auth, jobs, settings, workflows
 
 app = FastAPI(title="Dify Workflow Console", version="0.1.0")
 
@@ -53,6 +60,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(workflows.router)
 app.include_router(jobs.router)
+app.include_router(settings.router)
 
 
 @app.get("/api/health")

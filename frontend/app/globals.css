@@ -8,6 +8,19 @@
 
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
+  background-image: radial-gradient(60rem 60rem at 110% -10%, #eef2ff 0%, transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Consistent keyboard focus treatment */
+*:focus-visible {
+  @apply outline-none ring-2 ring-brand/40;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Lightweight typography for rendered readable docs */

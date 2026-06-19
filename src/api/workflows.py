@@ -6,6 +6,7 @@ plus summary counts.
 """
 
 import asyncio
+import os
 import re
 from datetime import datetime, timezone
 
@@ -49,7 +50,10 @@ def _build_dashboard() -> dict:
             {
                 "app_id": row["app_id"],
                 "name": row["name"] or (app or {}).get("name", ""),
-                "author": row["author"] or (app or {}).get("author", ""),
+                # Tracker's assigned owner only. We intentionally do NOT fall back
+                # to the Dify creator, otherwise unassigning yourself as the sole
+                # author would "reappear" from the Dify author_name.
+                "author": row["author"],
                 "tags": tags,
                 "decision": row.get("decision", ""),
                 "url": row.get("url", ""),
@@ -92,7 +96,11 @@ def _build_dashboard() -> dict:
         "missing_env_tag": len([r for r in live if r["missing_env_tag"]]),
         "marked_delete": len([r for r in live if r["decision"].strip().lower() == "delete"]),
     }
-    page_url = f"{confluence.CONFLUENCE_BASE_URL}/pages/{confluence.CONFLUENCE_PAGE_ID}"
+    page_url = (
+        f"{confluence.CONFLUENCE_BASE_URL}{page['webui']}"
+        if page.get("webui")
+        else f"{confluence.CONFLUENCE_BASE_URL}/pages/{confluence.CONFLUENCE_PAGE_ID}"
+    )
     return {
         "summary": summary,
         "records": records,
@@ -106,6 +114,49 @@ def _build_dashboard() -> dict:
 async def list_workflows(user: dict = Depends(require_auth)) -> dict:
     # Run the blocking client work off the event loop.
     return await asyncio.to_thread(_build_dashboard)
+
+
+# Where `./run.sh readable --output confluence` publishes the per-workflow docs.
+DOCS_INDEX_TITLE = "Dify Workflows — Index"
+
+
+def _doc_links() -> dict:
+    """Map each published readable doc page title -> its Confluence URL.
+
+    Reads the existing pages under the docs folder/index; never creates anything.
+    """
+    # Read dynamically so the Settings tab can change them without a restart.
+    DOCS_PARENT_ID = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430")
+    DOCS_SPACE = os.getenv("CONFLUENCE_DOCS_SPACE", "SIC")
+    links: dict[str, str] = {}
+    index_url: str | None = None
+    with httpx.Client(timeout=60) as client:
+        children = confluence.list_folder_children(client, DOCS_PARENT_ID)
+        index_pid: str | None = None
+        for c in children:
+            if c.get("type") != "page":
+                continue
+            if c["title"] == DOCS_INDEX_TITLE:
+                index_pid = c["id"]
+                continue
+            links[c["title"]] = c["id"]
+        if index_pid:
+            index_url = f"{confluence.CONFLUENCE_BASE_URL}/spaces/{DOCS_SPACE}/pages/{index_pid}"
+            for c in confluence.list_page_children(client, index_pid):
+                if c["title"] != DOCS_INDEX_TITLE:
+                    links[c["title"]] = c["id"]
+    return {
+        "links": {
+            title: f"{confluence.CONFLUENCE_BASE_URL}/spaces/{DOCS_SPACE}/pages/{pid}"
+            for title, pid in links.items()
+        },
+        "index_url": index_url,
+    }
+
+
+@router.get("/doc-links")
+async def doc_links(user: dict = Depends(require_auth)) -> dict:
+    return await asyncio.to_thread(_doc_links)
 
 
 class EnvTagsBody(BaseModel):
@@ -136,6 +187,67 @@ async def add_env_tags(app_id: str, body: EnvTagsBody, user: dict = Depends(requ
     return {"ok": True, "added": sorted(wanted)}
 
 
+class AuthorBody(BaseModel):
+    author: str = ""
+
+
+@router.post("/{app_id}/author")
+async def assign_author(
+    app_id: str, body: AuthorBody, user: dict = Depends(require_auth)
+) -> dict:
+    """Set the tracker Author cell for a workflow. Defaults to the current user."""
+    name = body.author.strip() or user.get("name") or user.get("email") or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="No author name available")
+
+    def _do() -> bool:
+        with httpx.Client(timeout=60) as client:
+            return sync_tracker.assign_author(client, app_id, name)
+
+    ok = await asyncio.to_thread(_do)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="Workflow is not on the tracker yet. Run Sync first, then assign.",
+        )
+    return {"ok": True, "author": name}
+
+
+@router.post("/{app_id}/author/unassign")
+async def unassign_author(
+    app_id: str, body: AuthorBody, user: dict = Depends(require_auth)
+) -> dict:
+    """Remove a name from the tracker Author cell. Defaults to the current user."""
+    name = body.author.strip() or user.get("name") or user.get("email") or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="No author name available")
+
+    def _do() -> bool:
+        with httpx.Client(timeout=60) as client:
+            return sync_tracker.remove_author(client, app_id, name)
+
+    ok = await asyncio.to_thread(_do)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Workflow is not on the tracker.")
+    return {"ok": True, "removed": name}
+
+
+@router.delete("/{app_id}/env-tags/{env}")
+async def remove_env_tag(app_id: str, env: str, user: dict = Depends(require_auth)) -> dict:
+    """Unbind a single environment tag (prod/dev/test) from a Dify app."""
+    name = env.strip().lower()
+    if name not in ENV_TAGS:
+        raise HTTPException(status_code=400, detail="env must be one of: prod, dev, test")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        token = await dify_api.login_and_get_token(client)
+        name_to_id = {t["name"].lower(): t["id"] for t in await dify_api.list_tags(token, client)}
+        tag_id = name_to_id.get(name)
+        if tag_id:
+            await dify_api.unbind_tag(token, client, tag_id, app_id)
+    return {"ok": True, "removed": name}
+
+
 @router.delete("/{app_id}")
 async def delete_workflow(app_id: str, user: dict = Depends(require_admin)) -> dict:
     """Delete a single workflow from Dify (admin only).
@@ -153,7 +265,7 @@ async def delete_workflow(app_id: str, user: dict = Depends(require_admin)) -> d
 
 @router.get("/{app_id}/export")
 async def export_workflow(
-    app_id: str, name: str | None = None, user: dict = Depends(require_auth)
+    app_id: str, name: str | None = None, user: dict = Depends(require_admin)
 ) -> Response:
     """Download a single workflow's DSL as a YAML file."""
     async with httpx.AsyncClient(timeout=120) as client:

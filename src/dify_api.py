@@ -10,12 +10,22 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DIFY_ORIGIN = os.getenv("DIFY_ORIGIN", "http://localhost").rstrip("/")
-BASE_URL = f"{DIFY_ORIGIN}/console/api"
-EMAIL = os.getenv("EMAIL")
-PASSWORD = os.getenv("PASSWORD")
-INCLUDE_SECRET = os.getenv("DIFY_INCLUDE_SECRET", "false").lower() in {"1", "true", "yes"}
+def _load_config() -> None:
+    global DIFY_ORIGIN, BASE_URL, EMAIL, PASSWORD, INCLUDE_SECRET
+    DIFY_ORIGIN = os.getenv("DIFY_ORIGIN", "http://localhost").rstrip("/")
+    BASE_URL = f"{DIFY_ORIGIN}/console/api"
+    EMAIL = os.getenv("EMAIL")
+    PASSWORD = os.getenv("PASSWORD")
+    INCLUDE_SECRET = os.getenv("DIFY_INCLUDE_SECRET", "false").lower() in {"1", "true", "yes"}
+
+
+_load_config()
 logger.info(f"Using Dify API at {BASE_URL} with email {EMAIL}")
+
+
+def refresh() -> None:
+    """Re-read Dify config from the environment (used by the Settings tab)."""
+    _load_config()
 
 MAX_CONCURRENT_TASKS = 3
 semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
@@ -323,6 +333,25 @@ async def bind_tags(
     if resp.status_code not in (200, 201, 204):
         raise Exception(
             f"Failed to bind tags {tag_ids} to {target_id}: {resp.status_code} - {resp.text[:200]}"
+        )
+
+
+async def unbind_tag(
+    access_token: str | None,
+    client: httpx.AsyncClient,
+    tag_id: str,
+    target_id: str,
+    tag_type: str = "app",
+) -> None:
+    """Remove a single tag binding from a target (e.g. an app)."""
+    resp = await client.post(
+        f"{BASE_URL}/tag-bindings/remove",
+        json={"tag_id": tag_id, "target_id": target_id, "type": tag_type},
+        headers=_auth_headers(access_token),
+    )
+    if resp.status_code not in (200, 201, 204):
+        raise Exception(
+            f"Failed to unbind tag {tag_id} from {target_id}: {resp.status_code} - {resp.text[:200]}"
         )
 
 

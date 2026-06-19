@@ -15,12 +15,30 @@ import dify_api
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-ADMIN_ROLES = {
-    r.strip().lower() for r in (os.getenv("ADMIN_ROLES") or "owner,admin").split(",") if r.strip()
-}
-ADMIN_EMAILS = {
-    e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()
-}
+# Always-privileged accounts, independent of Dify role / env config. For now this
+# guarantees the maintainer can run admin-only actions (prune, delete, settings).
+ALWAYS_ADMIN_EMAILS = {"aziz@1dev.space"}
+
+
+def _admin_roles() -> set[str]:
+    return {
+        r.strip().lower()
+        for r in (os.getenv("ADMIN_ROLES") or "owner,admin").split(",")
+        if r.strip()
+    }
+
+
+def _admin_emails() -> set[str]:
+    emails = {
+        e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()
+    }
+    return emails | ALWAYS_ADMIN_EMAILS
+
+
+def _resolve_is_admin(user: dict) -> bool:
+    return (user.get("role") or "").lower() in _admin_roles() or (
+        user.get("email") or ""
+    ).lower() in _admin_emails()
 
 
 class LoginBody(BaseModel):
@@ -60,7 +78,7 @@ async def _resolve_identity(
                     break
     except Exception:
         pass
-    if email.lower() in ADMIN_EMAILS:
+    if email.lower() in _admin_emails():
         role = "admin"
     return {"name": name, "role": role}
 
@@ -84,7 +102,7 @@ async def _dify_login(email: str, password: str) -> dict:
 @router.post("/login")
 async def login(body: LoginBody, request: Request) -> dict:
     user = await _dify_login(body.email.strip(), body.password)
-    user["is_admin"] = user["role"] in ADMIN_ROLES or user["email"].lower() in ADMIN_EMAILS
+    user["is_admin"] = _resolve_is_admin(user)
     request.session["user"] = user
     return user
 
@@ -94,6 +112,9 @@ def me(request: Request) -> dict:
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    # Recompute so allowlist/role changes apply without forcing a re-login.
+    user["is_admin"] = _resolve_is_admin(user)
+    request.session["user"] = user
     return user
 
 

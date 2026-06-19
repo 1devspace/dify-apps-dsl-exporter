@@ -53,6 +53,21 @@ export type Job = {
   meta: Record<string, unknown>;
 };
 
+export type SettingField = {
+  key: string;
+  label: string;
+  type: "text" | "password" | "bool";
+  help: string;
+  secret: boolean;
+  is_set: boolean;
+  value: string;
+};
+
+export type SettingGroup = { group: string; fields: SettingField[] };
+export type SettingsResponse = { groups: SettingGroup[] };
+export type TestResult = { ok: boolean; detail: string };
+export type SettingsTest = { confluence: TestResult; dify: TestResult };
+
 class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -91,11 +106,29 @@ export const api = {
     req<Job>(`/api/jobs/${type}`, { method: "POST" }),
   startPrune: (confirm: boolean) =>
     req<Job>("/api/jobs/prune", { method: "POST", body: JSON.stringify({ confirm }) }),
+  startDoc: (appId: string, name: string) =>
+    req<Job>("/api/jobs/doc", { method: "POST", body: JSON.stringify({ app_id: appId, name }) }),
   job: (id: string) => req<Job>(`/api/jobs/${id}`),
+  jobs: () => req<{ jobs: Job[] }>("/api/jobs"),
   addEnvTags: (appId: string, tags: string[]) =>
     req<{ ok: boolean; added: string[] }>(`/api/workflows/${appId}/env-tags`, {
       method: "POST",
       body: JSON.stringify({ tags }),
+    }),
+  removeEnvTag: (appId: string, env: string) =>
+    req<{ ok: boolean; removed: string }>(
+      `/api/workflows/${appId}/env-tags/${encodeURIComponent(env)}`,
+      { method: "DELETE" }
+    ),
+  assignAuthor: (appId: string, author = "") =>
+    req<{ ok: boolean; author: string }>(`/api/workflows/${appId}/author`, {
+      method: "POST",
+      body: JSON.stringify({ author }),
+    }),
+  unassignAuthor: (appId: string, author = "") =>
+    req<{ ok: boolean; removed: string }>(`/api/workflows/${appId}/author/unassign`, {
+      method: "POST",
+      body: JSON.stringify({ author }),
     }),
   deleteWorkflow: (appId: string) =>
     req<{ ok: boolean }>(`/api/workflows/${appId}`, { method: "DELETE" }),
@@ -103,8 +136,15 @@ export const api = {
     req<{ markdown: string }>(
       `/api/workflows/${appId}/readable?name=${encodeURIComponent(name)}`
     ),
+  docLinks: () =>
+    req<{ links: Record<string, string>; index_url: string | null }>("/api/workflows/doc-links"),
   exportUrl: (appId: string, name: string) =>
     `/api/workflows/${appId}/export?name=${encodeURIComponent(name)}`,
+  settings: () => req<SettingsResponse>("/api/settings"),
+  updateSettings: (values: Record<string, string | boolean>) =>
+    req<SettingsResponse>("/api/settings", { method: "PUT", body: JSON.stringify({ values }) }),
+  testSettings: (values: Record<string, string | boolean>) =>
+    req<SettingsTest>("/api/settings/test", { method: "POST", body: JSON.stringify({ values }) }),
 };
 
 export { ApiError };

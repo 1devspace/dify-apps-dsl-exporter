@@ -116,6 +116,96 @@ def parse_existing_rows(storage: str) -> tuple[str, list[dict]]:
     return header_html, rows
 
 
+def assign_author(client: httpx.Client, app_id: str, author: str) -> bool:
+    """Set the Author cell for a single tracked row, preserving everything else.
+
+    Returns False if the app has no row on the tracker yet (e.g. still "New").
+    """
+    page_id = confluence.CONFLUENCE_PAGE_ID
+    page = confluence.get_page(client, page_id)
+    soup = BeautifulSoup(page["storage"], "html.parser")
+    table = soup.find("table")
+    if table is None:
+        raise RuntimeError("Tracker page has no table; cannot assign author.")
+
+    target = None
+    for tr in table.find_all("tr"):
+        if tr.find("th") is not None:
+            continue
+        cells = tr.find_all("td")
+        if not cells:
+            continue
+        if cells[-1].get_text(strip=True) == app_id:
+            target = cells
+            break
+
+    if target is None or len(target) <= 6:
+        return False
+
+    author_cell = target[6]
+    author_cell.clear()
+    p = soup.new_tag("p")
+    p.string = author
+    author_cell.append(p)
+
+    confluence.update_page(
+        client,
+        page_id,
+        page["title"],
+        str(soup),
+        page["version"],
+        f"Assign author '{author}' to {app_id}",
+    )
+    return True
+
+
+def _find_row_cells(table, app_id: str):
+    """Return the <td> list for the row whose last cell holds app_id, else None."""
+    for tr in table.find_all("tr"):
+        if tr.find("th") is not None:
+            continue
+        cells = tr.find_all("td")
+        if cells and cells[-1].get_text(strip=True) == app_id:
+            return cells
+    return None
+
+
+def remove_author(client: httpx.Client, app_id: str, author: str) -> bool:
+    """Remove a single name from a tracked row's Author cell, keeping co-authors.
+
+    Returns False if the app has no row on the tracker yet.
+    """
+    page_id = confluence.CONFLUENCE_PAGE_ID
+    page = confluence.get_page(client, page_id)
+    soup = BeautifulSoup(page["storage"], "html.parser")
+    table = soup.find("table")
+    if table is None:
+        raise RuntimeError("Tracker page has no table; cannot edit author.")
+
+    cells = _find_row_cells(table, app_id)
+    if cells is None or len(cells) <= 6:
+        return False
+
+    author_cell = cells[6]
+    current = [p.strip() for p in author_cell.get_text().split(",") if p.strip()]
+    remaining = [p for p in current if p.lower() != author.strip().lower()]
+
+    author_cell.clear()
+    p = soup.new_tag("p")
+    p.string = ", ".join(remaining)
+    author_cell.append(p)
+
+    confluence.update_page(
+        client,
+        page_id,
+        page["title"],
+        str(soup),
+        page["version"],
+        f"Remove author '{author}' from {app_id}",
+    )
+    return True
+
+
 def build_new_row(app: dict, today: str) -> str:
     name = html.escape(app.get("name") or "")
     tags = html.escape(app.get("tags") or "")
@@ -237,7 +327,7 @@ def run(dry_run: bool = False, notify: bool = True) -> dict:
     print(f"  {len(dify_apps)} apps found.")
 
     page_id = confluence.CONFLUENCE_PAGE_ID
-    page_url = f"{confluence.CONFLUENCE_BASE_URL}/pages/{page_id}"
+    page_url = confluence.page_web_url(page_id)
 
     if dry_run:
         with httpx.Client(timeout=60) as client:

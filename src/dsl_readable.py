@@ -783,7 +783,7 @@ def _all_doc_pages(client, parent_id, index_pid) -> dict[str, str]:
 
 
 def run_confluence(files: list[str], parent_id: str, space_key: str, out_dir: str,
-                   diagrams: str = "image") -> None:
+                   diagrams: str = "image") -> list[dict]:
     with httpx.Client(timeout=60) as client:
         space_id = confluence.get_space_id(client, space_key)
         index_pid, index_url = _ensure_index_page(client, space_id, parent_id, space_key)
@@ -846,6 +846,7 @@ def run_confluence(files: list[str], parent_id: str, space_key: str, out_dir: st
         print(f"Done. {len(entries)} page(s) under index {index_pid} (folder {parent_id}).")
         print(f"Index: {index_url}")
         print(f"Links written to {links_path}")
+        return entries
 
 
 def _write_index_body(client, index_pid, all_docs: dict[str, str], entries: list[dict]) -> None:

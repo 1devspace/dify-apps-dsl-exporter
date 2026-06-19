@@ -13,15 +13,20 @@ import asyncio
 import contextlib
 import io
 import logging
+import os
 import queue
+import re
+import tempfile
 import threading
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
+import dify_api
 import export
 import prune_deleted
 import sync_env_tags
@@ -137,6 +142,37 @@ class PruneBody(BaseModel):
     confirm: bool = False
 
 
+class DocBody(BaseModel):
+    app_id: str
+    name: str | None = None
+
+
+def _publish_doc(app_id: str, name: str | None) -> dict:
+    """Export one workflow's DSL from Dify and (re)publish its Confluence doc."""
+    import dsl_readable  # heavy; only needed for this job
+
+    async def _export() -> str:
+        async with httpx.AsyncClient(timeout=120) as client:
+            token = await dify_api.login_and_get_token(client)
+            return await dify_api.export_app(token, app_id, client)
+
+    data = asyncio.run(_export())
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or app_id).strip()) or app_id
+    tmp = tempfile.mkdtemp(prefix="dify-doc-")
+    path = os.path.join(tmp, f"{safe}.yml")
+    body = data.encode("utf-8") if isinstance(data, str) else data
+    with open(path, "wb") as fh:
+        fh.write(body)
+
+    parent_id = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430")
+    space_key = os.getenv("CONFLUENCE_DOCS_SPACE", "SIC")
+    entries = dsl_readable.run_confluence([path], parent_id, space_key, tmp, "image")
+    if entries:
+        e = entries[0]
+        return {"ok": True, "title": e.get("title"), "url": e.get("url")}
+    return {"ok": False, "detail": "Nothing published (see log)."}
+
+
 @router.post("/sync")
 def start_sync(user: dict = Depends(require_auth)) -> dict:
     return _enqueue("sync", lambda: sync_tracker.run(dry_run=False, notify=True), {"by": user["email"]})
@@ -148,8 +184,17 @@ def start_tags(user: dict = Depends(require_auth)) -> dict:
 
 
 @router.post("/export")
-def start_export(user: dict = Depends(require_auth)) -> dict:
+def start_export(user: dict = Depends(require_admin)) -> dict:
     return _enqueue("export", lambda: asyncio.run(export.main()) or {"ok": True}, {"by": user["email"]})
+
+
+@router.post("/doc")
+def start_doc(body: DocBody, user: dict = Depends(require_auth)) -> dict:
+    return _enqueue(
+        "doc",
+        lambda: _publish_doc(body.app_id, body.name),
+        {"by": user["email"], "name": body.name or body.app_id},
+    )
 
 
 @router.post("/prune")
