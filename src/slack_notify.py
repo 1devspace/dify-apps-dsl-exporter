@@ -59,6 +59,9 @@ def mention(author: str) -> str:
 
 # Label used when a workflow has no recorded author/contributor.
 UNASSIGNED_LABEL = "Unassigned"
+# Placeholder author values that mean "no real owner". Kept in sync with the web
+# app (frontend UNKNOWN_AUTHORS) so both treat these as Unassigned.
+PLACEHOLDER_AUTHORS = {"unassigned", "unknown", "n/a", "na", "tbd", "-", "—"}
 # Cap workflows listed per author group to keep each Slack block readable.
 MAX_PER_AUTHOR = 15
 # Slack allows at most 50 blocks per message; stay safely under it.
@@ -70,11 +73,17 @@ def group_by_author(items: list[dict]) -> dict[str, list[dict]]:
 
     The "Author & contributor(s)" value can list several people (comma separated);
     a workflow is listed under every contributor so each person sees their own.
+    Placeholder values (Unknown/Unassigned/etc.) collapse into one "Unassigned"
+    bucket, matching how the web app treats unowned workflows.
     """
     groups: dict[str, list[dict]] = {}
     for item in items:
         raw = (item.get("author") or "").strip()
-        contributors = [c.strip() for c in raw.split(",") if c.strip()] or [UNASSIGNED_LABEL]
+        contributors = [
+            c.strip()
+            for c in raw.split(",")
+            if c.strip() and c.strip().lower() not in PLACEHOLDER_AUTHORS
+        ] or [UNASSIGNED_LABEL]
         seen: set[str] = set()
         for contributor in contributors:
             canonical = NAME_ALIASES.get(contributor.lower(), contributor)
