@@ -180,6 +180,7 @@ export default function DashboardPage() {
   const [showPrune, setShowPrune] = useState(false);
   const [busy, setBusy] = useState(false);
   const [docLinks, setDocLinks] = useState<Record<string, string>>({});
+  const [docLinksById, setDocLinksById] = useState<Record<string, string>>({});
   const [docIndexUrl, setDocIndexUrl] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -221,6 +222,7 @@ export default function DashboardPage() {
     try {
       const dl = await api.docLinks();
       setDocLinks(dl.links || {});
+      setDocLinksById(dl.links_by_id || {});
       setDocIndexUrl(dl.index_url);
     } catch {
       /* docs are optional; the menu falls back to generating one */
@@ -668,7 +670,7 @@ export default function DashboardPage() {
                     isAdmin={!!user?.is_admin}
                     meName={user?.name || ""}
                     meEmail={user?.email || ""}
-                    docUrl={docLinks[r.name]}
+                    docUrl={docLinksById[r.app_id] ?? docLinks[r.name]}
                     onGenerate={() => startDoc(r.app_id, r.name)}
                     onChanged={loadData}
                     onToast={pushToast}

@@ -137,7 +137,11 @@ export const api = {
       `/api/workflows/${appId}/readable?name=${encodeURIComponent(name)}`
     ),
   docLinks: () =>
-    req<{ links: Record<string, string>; index_url: string | null }>("/api/workflows/doc-links"),
+    req<{
+      links: Record<string, string>;
+      links_by_id: Record<string, string>;
+      index_url: string | null;
+    }>("/api/workflows/doc-links"),
   exportUrl: (appId: string, name: string) =>
     `/api/workflows/${appId}/export?name=${encodeURIComponent(name)}`,
   settings: () => req<SettingsResponse>("/api/settings"),

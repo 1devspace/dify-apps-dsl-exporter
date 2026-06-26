@@ -49,7 +49,10 @@ def _build_dashboard() -> dict:
         records.append(
             {
                 "app_id": row["app_id"],
-                "name": row["name"] or (app or {}).get("name", ""),
+                # Dify owns the workflow name: prefer the live name so renames in
+                # Dify show up immediately (tracker name is only a fallback, e.g.
+                # for workflows removed from Dify).
+                "name": (app.get("name") if app else "") or row["name"],
                 # Tracker's assigned owner only. We intentionally do NOT fall back
                 # to the Dify creator, otherwise unassigning yourself as the sole
                 # author would "reappear" from the Dify author_name.
@@ -129,6 +132,7 @@ def _doc_links() -> dict:
     DOCS_PARENT_ID = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430")
     DOCS_SPACE = os.getenv("CONFLUENCE_DOCS_SPACE", "SIC")
     links: dict[str, str] = {}
+    links_by_id: dict[str, str] = {}
     index_url: str | None = None
     with httpx.Client(timeout=60) as client:
         children = confluence.list_folder_children(client, DOCS_PARENT_ID)
@@ -145,11 +149,20 @@ def _doc_links() -> dict:
             for c in confluence.list_page_children(client, index_pid):
                 if c["title"] != DOCS_INDEX_TITLE:
                     links[c["title"]] = c["id"]
+        # Rename-safe map: Dify app id -> doc URL, via the page's dify-app-<id> label.
+        try:
+            for p in confluence.search_by_label(client, confluence.DOC_LABEL):
+                appid = confluence.app_id_from_labels(p.get("labels", set()))
+                if appid and p.get("webui"):
+                    links_by_id[appid] = f"{confluence.CONFLUENCE_BASE_URL}{p['webui']}"
+        except httpx.HTTPError:
+            pass
     return {
         "links": {
             title: f"{confluence.CONFLUENCE_BASE_URL}/spaces/{DOCS_SPACE}/pages/{pid}"
             for title, pid in links.items()
         },
+        "links_by_id": links_by_id,
         "index_url": index_url,
     }
 

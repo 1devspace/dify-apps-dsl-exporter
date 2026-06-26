@@ -231,6 +231,75 @@ def list_page_children(client: httpx.Client, page_id: str) -> list[dict]:
     return children
 
 
+# Labels used to tie a readable doc page to its Dify workflow, so the link
+# survives workflow renames (the page title can change; the app id does not).
+DOC_LABEL = "dify-doc"
+APP_LABEL_PREFIX = "dify-app-"
+
+
+def add_labels(client: httpx.Client, page_id: str, labels: list[str]) -> None:
+    """Attach one or more global labels to a page (idempotent on Confluence's side)."""
+    _require_base_auth()
+    if not labels:
+        return
+    payload = [{"prefix": "global", "name": label} for label in labels]
+    resp = client.post(
+        f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/label",
+        json=payload,
+        headers=_json_headers(),
+    )
+    resp.raise_for_status()
+
+
+def search_by_label(client: httpx.Client, label: str) -> list[dict]:
+    """Return pages carrying a label: dicts with id, title, webui, labels (set)."""
+    _require_base_auth()
+    out: list[dict] = []
+    start, limit = 0, 100
+    while True:
+        resp = client.get(
+            f"{CONFLUENCE_BASE_URL}/rest/api/content/search",
+            params={
+                "cql": f'type=page and label="{label}"',
+                "expand": "metadata.labels",
+                "limit": limit,
+                "start": start,
+            },
+            headers={"Authorization": _auth_header(), "Accept": "application/json"},
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        results = body.get("results", [])
+        for r in results:
+            labels = {
+                lab.get("name")
+                for lab in (r.get("metadata", {}).get("labels", {}).get("results", []))
+            }
+            out.append(
+                {
+                    "id": r.get("id"),
+                    "title": r.get("title"),
+                    "webui": (r.get("_links", {}) or {}).get("webui", ""),
+                    "labels": labels,
+                }
+            )
+        if not results or start + len(results) >= body.get("totalSize", len(out)):
+            break
+        start += limit
+    return out
+
+
+def app_label(app_id: str) -> str:
+    return f"{APP_LABEL_PREFIX}{app_id}"
+
+
+def app_id_from_labels(labels: set[str]) -> str | None:
+    for lab in labels:
+        if lab and lab.startswith(APP_LABEL_PREFIX):
+            return lab[len(APP_LABEL_PREFIX):]
+    return None
+
+
 def create_page(
     client: httpx.Client, space_id: str, parent_id: str, title: str, storage_body: str
 ) -> dict:

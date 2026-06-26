@@ -730,11 +730,11 @@ def _write_links_file(out_dir: str, entries: list[dict], index_url: str | None) 
 INDEX_TITLE = "Dify Workflows — Index"
 
 
-def _dify_url_map() -> dict[str, str]:
-    """Best-effort {workflow name: Dify workflow URL}, for unambiguous names only.
+def _dify_app_map() -> dict[str, dict]:
+    """Best-effort {workflow name: {"url", "id"}}, for unambiguous names only.
 
     Requires reaching the Dify console (VPN/Tailnet). Returns {} if unreachable so
-    Confluence publishing still works without the live links.
+    Confluence publishing still works without the live links / id-based linking.
     """
     import asyncio
     from collections import Counter
@@ -753,9 +753,11 @@ def _dify_url_map() -> dict[str, str]:
         print(f"  ! could not reach Dify for workflow links ({exc}); skipping 'Open in Dify' links")
         return {}
     counts = Counter(a.get("name") for a in apps if a.get("name"))
-    return {a["name"]: sync_tracker.workflow_url(a["id"])
-            for a in apps
-            if a.get("name") and a.get("id") and counts[a["name"]] == 1}
+    return {
+        a["name"]: {"url": sync_tracker.workflow_url(a["id"]), "id": a["id"]}
+        for a in apps
+        if a.get("name") and a.get("id") and counts[a["name"]] == 1
+    }
 
 
 def _ensure_index_page(client, space_id, parent_id, space_key) -> tuple[str, str]:
@@ -791,7 +793,16 @@ def run_confluence(files: list[str], parent_id: str, space_key: str, out_dir: st
         print(f"Space '{space_key}' (id {space_id}), folder {parent_id}: "
               f"index page {index_pid}, {len(existing)} existing doc page(s).")
 
-        dify_urls = _dify_url_map()
+        app_map = _dify_app_map()
+        # Map Dify app id -> existing doc page id (rename-safe linking via labels).
+        existing_by_app: dict[str, str] = {}
+        try:
+            for p in confluence.search_by_label(client, confluence.DOC_LABEL):
+                appid = confluence.app_id_from_labels(p.get("labels", set()))
+                if appid:
+                    existing_by_app[appid] = p["id"]
+        except httpx.HTTPError as exc:
+            print(f"  ! could not read doc labels ({exc}); falling back to title matching")
 
         used: set[str] = set()
         entries: list[dict] = []
@@ -806,7 +817,9 @@ def run_confluence(files: list[str], parent_id: str, space_key: str, out_dir: st
             wf_name = app.get("name") or base
             title = _unique_title(wf_name, base, used)
             blocks = build_blocks(dsl, os.path.basename(path), include_title=False)
-            dify_url = dify_urls.get(wf_name)
+            app_info = app_map.get(wf_name) or {}
+            app_id = app_info.get("id")
+            dify_url = app_info.get("url")
             if dify_url:
                 blocks.insert(1, b_para(f"**Workflow:** [Open in Dify]({dify_url})"))
 
@@ -816,17 +829,28 @@ def run_confluence(files: list[str], parent_id: str, space_key: str, out_dir: st
             storage = blocks_to_storage(blocks)
 
             try:
-                if title in existing:
-                    pid = existing[title]
+                # Prefer matching the existing page by Dify app id (survives a
+                # rename); fall back to the title for legacy/unlabelled pages.
+                pid = (app_id and existing_by_app.get(app_id)) or existing.get(title)
+                if pid:
                     page = confluence.get_page(client, pid)
                     res = confluence.update_page(client, pid, title, storage, page["version"],
                                                  "Update from DSL readable converter",
                                                  parent_id=index_pid)
-                    action = "updated"
+                    action = "renamed" if page.get("title") != title else "updated"
                 else:
                     res = confluence.create_page(client, space_id, index_pid, title, storage)
                     pid = res["id"]
                     action = "created"
+                # Stamp labels so future runs/links find this page by app id.
+                labels = [confluence.DOC_LABEL]
+                if app_id:
+                    labels.append(confluence.app_label(app_id))
+                    existing_by_app[app_id] = pid
+                try:
+                    confluence.add_labels(client, pid, labels)
+                except httpx.HTTPError as exc:
+                    print(f"    ! could not label {title} ({exc})")
                 for filename, data, ctype in uploads:
                     confluence.upload_attachment(client, pid, filename, data, ctype)
             except httpx.HTTPError as exc:

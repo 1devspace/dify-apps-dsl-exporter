@@ -206,6 +206,22 @@ def remove_author(client: httpx.Client, app_id: str, author: str) -> bool:
     return True
 
 
+def update_row_name(row_html: str, new_name: str) -> str:
+    """Return the row HTML with its Name cell (column 1) replaced by new_name."""
+    soup = BeautifulSoup(row_html, "html.parser")
+    tr = soup.find("tr")
+    if tr is None:
+        return row_html
+    cells = tr.find_all("td")
+    if len(cells) > 1:
+        cell = cells[1]
+        cell.clear()
+        p = soup.new_tag("p")
+        p.string = new_name
+        cell.append(p)
+    return str(tr)
+
+
 def build_new_row(app: dict, today: str) -> str:
     name = html.escape(app.get("name") or "")
     tags = html.escape(app.get("tags") or "")
@@ -256,9 +272,17 @@ def merge(existing_rows: list[dict], dify_apps: list[dict], today: str):
 
     # Preserve existing rows in order; flag any that vanished from Dify.
     for row in existing_rows:
-        if row["app_id"] in dify_by_id:
-            rows_html.append(row["html"])
-            entry = {"name": row["name"], "url": row["url"], "author": row["author"]}
+        app = dify_by_id.get(row["app_id"])
+        if app is not None:
+            row_html = row["html"]
+            name = row["name"]
+            # Dify owns the name: propagate renames into the tracker cell.
+            dify_name = (app.get("name") or "").strip()
+            if dify_name and dify_name != row["name"]:
+                row_html = update_row_name(row_html, dify_name)
+                name = dify_name
+            rows_html.append(row_html)
+            entry = {"name": name, "url": row["url"], "author": row["author"]}
             if not row["is_done"]:
                 pending.append(entry)
             if not has_env_tag(row.get("tags", "")):
