@@ -286,6 +286,36 @@ configured in `.env`; the per-user login only controls access and role gating.
 Not yet included (planned later phases): persistent job history, in-app workflow
 health/analysis, and live Dify execution/runtime monitoring.
 
+### Deploy on a local server (Docker)
+
+The app ships with a `docker-compose.yml` that builds two images — the FastAPI
+backend (`Dockerfile.api`) and the Next.js frontend (`frontend/Dockerfile`, built
+to a standalone server).
+
+```bash
+cp .env.example .env       # fill in real values; set a strong SESSION_SECRET
+docker compose up -d --build
+# open http://<server-host>:3000
+```
+
+Notes:
+
+- **Host networking** is used so the backend can resolve/reach Dify over your
+  Tailnet (MagicDNS names resolve via the host's `tailscaled`). This requires a
+  **Linux host**; Docker Desktop on macOS/Windows does not support
+  `network_mode: host`.
+  - Bridge alternative (only if the server reaches Dify via normal DNS/routing):
+    remove the two `network_mode: host` lines, add `ports: ["8008:8008"]` to
+    `api` and `ports: ["3000:3000"]` to `web`, and set the `web` build arg +
+    env `BACKEND_URL=http://api:8008`.
+- **Persistence**: the `appdata` volume holds the UI settings overlay
+  (`/app/data/settings.json`) and job outputs (`/app/data/dsl`, `…/readable`,
+  and the sibling trashcan). Don't run more than one `api` replica — the job
+  runner is in-memory/single-worker.
+- **HTTPS**: for plain-HTTP LAN access the defaults are fine. Behind a TLS
+  reverse proxy, set `https_only=True` on the session cookie in `src/api/app.py`
+  and point `FRONTEND_ORIGINS` at the HTTPS URL.
+
 ## Readable Markdown reports
 
 Dify DSL exports are built for the Dify editor, not for humans: node IDs are opaque
