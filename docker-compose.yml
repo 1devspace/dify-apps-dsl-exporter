@@ -5,10 +5,10 @@
 #
 # Open http://<server-host>:3000
 #
-# Host networking is used so the backend can resolve/reach Dify over your
-# Tailnet (MagicDNS names like dify.pelonis.seneca.center resolve via the host's
-# tailscaled). This requires a Linux host — Docker Desktop on macOS/Windows does
-# not support network_mode: host. On those, see the bridge note in the README.
+# Host networking is used so the backend can resolve/reach Dify over a private
+# network (e.g. NetBird/Tailscale MagicDNS names resolve via the host). This
+# requires a Linux host — Docker Desktop on macOS/Windows does not support
+# network_mode: host. On those, see the bridge note in the README.
 
 services:
   api:

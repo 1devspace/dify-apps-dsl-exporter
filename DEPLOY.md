@@ -1,13 +1,14 @@
 # Run the Dify Workflow Console on the local server
 
-A short guide to deploy the app with Docker on our local (Linux) server.
+A short guide to deploy the app with Docker on a local (Linux) server.
 
 ## Prerequisites
 
 - A **Linux** host with **Docker** + **Docker Compose v2** (`docker compose version`).
-- The server is on our **Tailnet** (so it can reach `dify.pelonis.seneca.center`).
-  Quick check: `curl -sI https://dify.pelonis.seneca.center | head -1`.
-- The `.env` file with real credentials (ask Aziz — it's not in git).
+- Network reachability to your **Dify** instance. If Dify is only reachable over a
+  private network (e.g. NetBird/Tailscale), the host must be on that network.
+  Quick check: `curl -sI https://<your-dify-host> | head -1`.
+- A `.env` file with real credentials in the repo root (it is not in git).
 
 ## Steps
 
@@ -15,10 +16,9 @@ A short guide to deploy the app with Docker on our local (Linux) server.
 # 1. Get the code
 git clone <repo-url>
 cd dify-apps-dsl-exporter
-git checkout feat/web-app        # branch with the web app + Docker setup
 
-# 2. Add the .env (copy the one Aziz shares) into the repo root.
-#    If starting fresh:  cp .env.example .env  and fill in the values.
+# 2. Create the .env in the repo root:
+#    cp .env.example .env  and fill in the values.
 #    Make sure SESSION_SECRET is set to a long random string:
 #    python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
@@ -51,8 +51,8 @@ docker compose up -d --build    # update after a git pull
 ## Notes
 
 - **Networking**: compose uses host networking so the backend can resolve Dify
-  over the Tailnet. This needs Linux (it won't work on Docker Desktop for
-  macOS/Windows).
+  over a private network (e.g. NetBird/Tailscale). This needs Linux (it won't
+  work on Docker Desktop for macOS/Windows).
 - **Data**: settings saved from the UI and job outputs live in the `appdata`
   Docker volume (`/app/data`). They survive restarts.
 - **Admins**: prune / single-delete / settings / YAML export require an admin
@@ -63,7 +63,7 @@ docker compose up -d --build    # update after a git pull
 ## Troubleshooting
 
 - **Login fails / dashboard empty** → backend can't reach Dify. Check
-  `docker compose logs api` and confirm the Tailnet/DNS works from the host.
+  `docker compose logs api` and confirm the network/DNS works from the host.
 - **Can't open `:3000` from another machine** → check the host firewall allows
   ports 3000 (and 8008).
 - **403 on prune/delete/settings** → your account isn't an admin.

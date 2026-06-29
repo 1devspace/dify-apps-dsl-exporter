@@ -85,7 +85,7 @@ DIFY_INCLUDE_SECRET=false
 ```
 
 **Important Notes:**
-- Remove any trailing slashes from `DIFY_ORIGIN` (e.g., use `https://dify.dctrl.ai` not `https://dify.dctrl.ai/`)
+- Remove any trailing slashes from `DIFY_ORIGIN` (e.g., use `https://dify.example.com` not `https://dify.example.com/`)
 - For self-hosted instances, use your full URL (e.g., `http://localhost:3000`)
 - For cloud instances, use the full domain (e.g., `https://api.dify.ai`)
 - Keep `DIFY_INCLUDE_SECRET=false` for normal team sharing. Set it to `true` only if you intentionally need exported secret values in the YAML files.

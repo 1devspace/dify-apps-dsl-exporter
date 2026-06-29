@@ -9,14 +9,12 @@ __pycache__
 data
 dsl
 dsl-*
+dify-*-workflows
 *-trashcan
 *-readable
-dify-pelonis-readable
-dify-pelonis-trashcan
 frontend/node_modules
 frontend/.next
 frontend/out
 **/*.log
 .DS_Store
 .cursor
-WORKFLOW_EVALUATION.md

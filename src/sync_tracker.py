@@ -22,6 +22,7 @@ Usage:
 import argparse
 import asyncio
 import html
+import os
 from datetime import datetime, timezone
 
 import httpx
@@ -31,7 +32,10 @@ import confluence
 import dify_api
 import slack_notify
 
-PAGE_TITLE = "Pelonis Dify Workflows Tracker"
+# Human label for this deployment, used in the Confluence page heading and Slack
+# messages. Override with PROJECT_LABEL (e.g. "Acme Dify Workflows").
+PROJECT_LABEL = (os.getenv("PROJECT_LABEL") or "Dify Workflows").strip()
+PAGE_TITLE = f"{PROJECT_LABEL} Tracker"
 WORKFLOW_LINK_TEXT = "Open workflow"
 # A workflow should carry at least one of these environment tags.
 ENV_TAGS = {"prod", "dev", "test"}

@@ -34,6 +34,10 @@ import confluence
 DSL_FOLDER_PATH = os.getenv("DSL_FOLDER_PATH", "./dsl").strip()
 DEFAULT_OUT = os.getenv("READABLE_FOLDER_PATH", "./readable").strip()
 
+# Human label for this deployment, used in the generated index title. Override
+# with PROJECT_LABEL (e.g. "Acme Dify Workflows").
+PROJECT_LABEL = (os.getenv("PROJECT_LABEL") or "Dify Workflows").strip()
+
 # Kroki renders Mermaid -> SVG/PNG so diagrams show up as real images in Confluence
 # (which has no native Mermaid support). Point KROKI_URL at a self-hosted instance for
 # full privacy: `docker run -p 8000:8000 yuzutech/kroki` then KROKI_URL=http://localhost:8000
@@ -638,7 +642,7 @@ def run_local(files: list[str], out_dir: str) -> None:
         entries.append(_workflow_info(dsl, base, out_name))
         print(f"  + {out_name}")
 
-    lines = ["# Pelonis Dify Workflows — Readable Index", "",
+    lines = [f"# {PROJECT_LABEL} — Readable Index", "",
              f"{len(entries)} workflow(s). Generated from DSL exports.", "",
              "| Workflow | Mode | Nodes | Top node types |", "| --- | --- | --- | --- |"]
     for e in sorted(entries, key=lambda x: x["name"].lower()):
@@ -733,7 +737,7 @@ INDEX_TITLE = "Dify Workflows — Index"
 def _dify_app_map() -> dict[str, dict]:
     """Best-effort {workflow name: {"url", "id"}}, for unambiguous names only.
 
-    Requires reaching the Dify console (VPN/Tailnet). Returns {} if unreachable so
+    Requires reaching the Dify console (may need a VPN/private network). Returns {} if unreachable so
     Confluence publishing still works without the live links / id-based linking.
     """
     import asyncio

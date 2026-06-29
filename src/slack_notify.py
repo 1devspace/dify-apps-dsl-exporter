@@ -20,6 +20,10 @@ load_dotenv()
 
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
+# Human label for this deployment, shown in message titles. Override with
+# PROJECT_LABEL (e.g. "Acme Dify Workflows").
+PROJECT_LABEL = (os.getenv("PROJECT_LABEL") or "Dify Workflows").strip()
+
 
 def refresh() -> None:
     """Re-read the Slack webhook from the environment (used by the Settings tab)."""
@@ -170,11 +174,11 @@ def build_messages(stats: dict, pending: list[dict], missing_tags: list[dict], p
     if pending:
         intro = [_section(summary), {"type": "divider"}, _section("*Pending information input (by contributor):*")]
         messages += _paginate(
-            "Pelonis Dify Workflows - weekly status", intro, _author_sections(pending), page_url, fallback
+            f"{PROJECT_LABEL} - weekly status", intro, _author_sections(pending), page_url, fallback
         )
     else:
         intro = [_section(summary), _section(":white_check_mark: No workflows are pending information input.")]
-        messages += _paginate("Pelonis Dify Workflows - weekly status", intro, [], page_url, fallback)
+        messages += _paginate(f"{PROJECT_LABEL} - weekly status", intro, [], page_url, fallback)
 
     # Message(s) 2: workflows missing an environment tag (prod/dev/test).
     if missing_tags:

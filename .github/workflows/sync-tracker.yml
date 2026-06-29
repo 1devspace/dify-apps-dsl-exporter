@@ -22,8 +22,8 @@ concurrency:
 
 jobs:
   sync:
-    # Self-hosted runner on our network: it can reach Dify over the VPN/Tailnet,
-    # which GitHub-hosted runners cannot.
+    # Self-hosted runner on your network: it can reach Dify over a private
+    # network (VPN/NetBird/Tailscale), which GitHub-hosted runners cannot.
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +45,7 @@ jobs:
           CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
           CONFLUENCE_PAGE_ID: ${{ secrets.CONFLUENCE_PAGE_ID }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PROJECT_LABEL: ${{ vars.PROJECT_LABEL }}
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
