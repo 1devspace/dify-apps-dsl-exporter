@@ -11,12 +11,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def _load_config() -> None:
-    global DIFY_ORIGIN, BASE_URL, EMAIL, PASSWORD, INCLUDE_SECRET
+    global DIFY_ORIGIN, BASE_URL, EMAIL, PASSWORD, INCLUDE_SECRET, AUTHOR_IGNORE_EMAILS
     DIFY_ORIGIN = os.getenv("DIFY_ORIGIN", "http://localhost").rstrip("/")
     BASE_URL = f"{DIFY_ORIGIN}/console/api"
     EMAIL = os.getenv("EMAIL")
     PASSWORD = os.getenv("PASSWORD")
     INCLUDE_SECRET = os.getenv("DIFY_INCLUDE_SECRET", "false").lower() in {"1", "true", "yes"}
+    # Accounts to ignore when guessing a workflow's author from version/draft
+    # history. The bulk importer shows up as creator/editor on every app, so it
+    # is pure noise for attribution. Defaults to the importer/admin email.
+    raw = os.getenv("AUTHOR_SUGGESTION_IGNORE_EMAILS", "")
+    AUTHOR_IGNORE_EMAILS = {e.strip().lower() for e in raw.split(",") if e.strip()}
 
 
 _load_config()
@@ -353,6 +358,67 @@ async def unbind_tag(
         raise Exception(
             f"Failed to unbind tag {tag_id} from {target_id}: {resp.status_code} - {resp.text[:200]}"
         )
+
+
+def _clean_actor(actor: dict | None) -> dict | None:
+    """Return {name, email} for a Dify actor, unless it's an ignored account."""
+    if not actor:
+        return None
+    email = (actor.get("email") or "").strip()
+    name = (actor.get("name") or "").strip()
+    if not name and not email:
+        return None
+    if email.lower() in AUTHOR_IGNORE_EMAILS:
+        return None
+    return {"name": name or email, "email": email}
+
+
+async def suggest_author(
+    access_token: str | None, app_id: str, client: httpx.AsyncClient
+) -> dict | None:
+    """Guess a workflow's real author from Dify history.
+
+    Strategy (best signal first):
+      1. Published version history (`/workflows`): whoever published the most
+         recent version wins (excluding ignored accounts like the importer).
+      2. Draft `updated_by`: the last person who edited the draft.
+    Returns {name, email, source, candidates} or None when nothing is known.
+    `candidates` lists every distinct contributor (newest first) for context.
+    """
+    headers = _auth_headers(access_token)
+
+    # 1) Published versions — each carries its own publisher.
+    try:
+        resp = await client.get(
+            f"{BASE_URL}/apps/{app_id}/workflows", params={"page": 1, "limit": 50}, headers=headers
+        )
+        items = resp.json().get("items", []) if resp.status_code == 200 and resp.content else []
+    except (httpx.HTTPError, ValueError):
+        items = []
+
+    versions = sorted(items, key=lambda it: it.get("created_at") or 0, reverse=True)
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for it in versions:
+        actor = _clean_actor(it.get("created_by"))
+        if actor and actor["name"] not in seen:
+            seen.add(actor["name"])
+            candidates.append(actor)
+    if candidates:
+        top = candidates[0]
+        return {**top, "source": "published", "candidates": candidates}
+
+    # 2) Fall back to the draft's last editor.
+    try:
+        resp = await client.get(f"{BASE_URL}/apps/{app_id}/workflows/draft", headers=headers)
+        draft = resp.json() if resp.status_code == 200 and resp.content else {}
+    except (httpx.HTTPError, ValueError):
+        draft = {}
+    actor = _clean_actor(draft.get("updated_by")) or _clean_actor(draft.get("created_by"))
+    if actor:
+        return {**actor, "source": "draft", "candidates": [actor]}
+
+    return None
 
 
 async def export_app(access_token: str | None, app_id: str, client: httpx.AsyncClient) -> bytes:

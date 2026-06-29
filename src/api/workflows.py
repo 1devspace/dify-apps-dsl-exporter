@@ -25,6 +25,13 @@ router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 ENV_TAGS = {"prod", "dev", "test"}
 
+# Confluence is reached over public DNS, which can blip on split-DNS setups
+# (e.g. NetBird). One transport-level retry masks a brief blip; we keep it low
+# because a hung system resolver (getaddrinfo) makes each retry slow, and the
+# endpoint already turns a real outage into a clear 503.
+def _confluence_client(timeout: int = 20) -> httpx.Client:
+    return httpx.Client(timeout=timeout, transport=httpx.HTTPTransport(retries=1))
+
 
 def _safe_filename(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (name or "workflow").strip())
@@ -36,7 +43,7 @@ def _build_dashboard() -> dict:
     dify_apps = asyncio.run(sync_tracker.fetch_dify_apps())
     dify_by_id = {a["id"]: a for a in dify_apps if a.get("id")}
 
-    with httpx.Client(timeout=60) as client:
+    with _confluence_client() as client:
         page = confluence.get_page(client, confluence.CONFLUENCE_PAGE_ID)
     _, existing_rows = sync_tracker.parse_existing_rows(page["storage"])
     tracked_ids = {r["app_id"] for r in existing_rows}
@@ -116,7 +123,17 @@ def _build_dashboard() -> dict:
 @router.get("")
 async def list_workflows(user: dict = Depends(require_auth)) -> dict:
     # Run the blocking client work off the event loop.
-    return await asyncio.to_thread(_build_dashboard)
+    try:
+        return await asyncio.to_thread(_build_dashboard)
+    except httpx.ConnectError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Couldn't reach Confluence (DNS/network). This is usually a "
+                "transient VPN/DNS blip — check NetBird and retry. "
+                f"({exc})"
+            ),
+        ) from exc
 
 
 # Where `./run.sh readable --output confluence` publishes the per-workflow docs.
@@ -129,12 +146,15 @@ def _doc_links() -> dict:
     Reads the existing pages under the docs folder/index; never creates anything.
     """
     # Read dynamically so the Settings tab can change them without a restart.
-    DOCS_PARENT_ID = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430")
-    DOCS_SPACE = os.getenv("CONFLUENCE_DOCS_SPACE", "SIC")
+    DOCS_PARENT_ID = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "")
+    DOCS_SPACE = os.getenv("CONFLUENCE_DOCS_SPACE", "")
     links: dict[str, str] = {}
     links_by_id: dict[str, str] = {}
     index_url: str | None = None
-    with httpx.Client(timeout=60) as client:
+    # No docs space configured: nothing to map.
+    if not DOCS_PARENT_ID:
+        return {"links": {}, "links_by_id": {}, "index_url": None}
+    with _confluence_client() as client:
         children = confluence.list_folder_children(client, DOCS_PARENT_ID)
         index_pid: str | None = None
         for c in children:
@@ -170,6 +190,34 @@ def _doc_links() -> dict:
 @router.get("/doc-links")
 async def doc_links(user: dict = Depends(require_auth)) -> dict:
     return await asyncio.to_thread(_doc_links)
+
+
+class SuggestBody(BaseModel):
+    app_ids: list[str]
+
+
+@router.post("/author-suggestions")
+async def author_suggestions(body: SuggestBody, user: dict = Depends(require_auth)) -> dict:
+    """Suggest a likely author for each given workflow from Dify version/draft history.
+
+    Used by the dashboard to offer one-click "Assign" for unknown-author rows.
+    Returns {app_id: {name, email, source, candidates}} (only apps with a guess).
+    """
+    app_ids = [a for a in dict.fromkeys(body.app_ids) if a]  # de-dupe, keep order
+    if not app_ids:
+        return {"suggestions": {}}
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        token = await dify_api.login_and_get_token(client)
+
+        async def one(app_id: str) -> tuple[str, dict | None]:
+            try:
+                return app_id, await dify_api.suggest_author(token, app_id, client)
+            except httpx.HTTPError:
+                return app_id, None
+
+        results = await asyncio.gather(*(one(a) for a in app_ids))
+    return {"suggestions": {aid: s for aid, s in results if s}}
 
 
 class EnvTagsBody(BaseModel):

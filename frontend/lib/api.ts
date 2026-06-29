@@ -22,6 +22,13 @@ export type WorkflowRecord = {
   source: string;
 };
 
+export type AuthorSuggestion = {
+  name: string;
+  email: string;
+  source: "published" | "draft";
+  candidates: { name: string; email: string }[];
+};
+
 export type Summary = {
   total_records: number;
   live: number;
@@ -130,6 +137,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ author }),
     }),
+  authorSuggestions: (appIds: string[]) =>
+    req<{ suggestions: Record<string, AuthorSuggestion> }>(
+      "/api/workflows/author-suggestions",
+      { method: "POST", body: JSON.stringify({ app_ids: appIds }) }
+    ),
   deleteWorkflow: (appId: string) =>
     req<{ ok: boolean }>(`/api/workflows/${appId}`, { method: "DELETE" }),
   readable: (appId: string, name: string) =>

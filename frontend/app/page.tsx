@@ -3,7 +3,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { api, ApiError, Dashboard, Job, User, WorkflowRecord } from "@/lib/api";
+import { api, ApiError, AuthorSuggestion, Dashboard, Job, User, WorkflowRecord } from "@/lib/api";
 import JobDrawer from "@/components/JobDrawer";
 import PruneModal from "@/components/PruneModal";
 import BrandLockup from "@/components/BrandLockup";
@@ -184,6 +184,7 @@ export default function DashboardPage() {
   const [docIndexUrl, setDocIndexUrl] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [suggestions, setSuggestions] = useState<Record<string, AuthorSuggestion>>({});
 
   const pushToast = useCallback((message: string, kind: Toast["kind"] = "info") => {
     const id = Math.random().toString(36).slice(2);
@@ -242,6 +243,30 @@ export default function DashboardPage() {
       await loadJobs();
     })();
   }, [router, loadData, loadDocLinks, loadJobs]);
+
+  // For tracked, live workflows with no author, ask Dify who published/edited
+  // them so we can offer a one-click "Assign <name>".
+  useEffect(() => {
+    const ids = (data?.records ?? [])
+      .filter((r) => r.live_in_dify && r.source !== "new" && splitAuthors(r.author).length === 0)
+      .map((r) => r.app_id);
+    if (ids.length === 0) {
+      setSuggestions({});
+      return;
+    }
+    let cancelled = false;
+    api
+      .authorSuggestions(ids)
+      .then((res) => {
+        if (!cancelled) setSuggestions(res.suggestions || {});
+      })
+      .catch(() => {
+        /* suggestions are best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data]);
 
   const onJobFinished = useCallback(
     (job: Job) => {
@@ -671,6 +696,7 @@ export default function DashboardPage() {
                     meName={user?.name || ""}
                     meEmail={user?.email || ""}
                     docUrl={docLinksById[r.app_id] ?? docLinks[r.name]}
+                    suggestion={suggestions[r.app_id]}
                     onGenerate={() => startDoc(r.app_id, r.name)}
                     onChanged={loadData}
                     onToast={pushToast}
@@ -1487,6 +1513,24 @@ function PlusIcon({ className }: { className?: string }) {
   );
 }
 
+function SparkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={className}
+    >
+      <path d="M12 3l1.9 4.6L18.5 9.5 13.9 11.4 12 16l-1.9-4.6L5.5 9.5l4.6-1.9z" />
+      <path d="M19 14l.7 1.8L21.5 16.5 19.7 17.2 19 19l-.7-1.8L16.5 16.5l1.8-.7z" />
+    </svg>
+  );
+}
+
 function XIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -1528,6 +1572,7 @@ function Row({
   meName,
   meEmail,
   docUrl,
+  suggestion,
   onGenerate,
   onChanged,
   onToast,
@@ -1537,6 +1582,7 @@ function Row({
   meName: string;
   meEmail: string;
   docUrl?: string;
+  suggestion?: AuthorSuggestion;
   onGenerate: () => void;
   onChanged: () => void;
   onToast: (msg: string, kind: Toast["kind"]) => void;
@@ -1579,10 +1625,10 @@ function Row({
     }
   }
 
-  async function assignToMe() {
+  async function assign(name = "") {
     setBusy(true);
     try {
-      const res = await api.assignAuthor(r.app_id);
+      const res = await api.assignAuthor(r.app_id, name);
       onToast(`Assigned "${r.name}" to ${res.author}`, "success");
       onChanged();
     } catch (e) {
@@ -1674,15 +1720,32 @@ function Row({
             —
           </span>
         ) : (
-          <button
-            onClick={assignToMe}
-            disabled={busy}
-            title="Assign this workflow to yourself in the tracker"
-            className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-400 transition hover:border-brand hover:text-brand disabled:opacity-50"
-          >
-            <PlusIcon className="h-3 w-3" />
-            Assign to me
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={() => assign()}
+              disabled={busy}
+              title="Assign this workflow to yourself in the tracker"
+              className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-400 transition hover:border-brand hover:text-brand disabled:opacity-50"
+            >
+              <PlusIcon className="h-3 w-3" />
+              Assign to me
+            </button>
+            {suggestion && !isMe(suggestion.name) && (
+              <button
+                onClick={() => assign(suggestion.name)}
+                disabled={busy}
+                title={`Dify ${
+                  suggestion.source === "published" ? "publish history" : "draft edits"
+                } point to ${suggestion.name}${
+                  suggestion.email ? ` (${suggestion.email})` : ""
+                }. Click to assign them in the tracker.`}
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-brand-200 bg-brand-50/40 px-2 py-0.5 text-xs text-brand-600 transition hover:border-brand hover:bg-brand-50 disabled:opacity-50"
+              >
+                <SparkIcon className="h-3 w-3" />
+                Assign {suggestion.name}
+              </button>
+            )}
+          </div>
         )}
       </td>
       <td className="px-4 py-3">
