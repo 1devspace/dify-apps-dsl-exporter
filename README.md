@@ -204,10 +204,10 @@ Add the following to `.env` (local runs) and as **GitHub Actions repository secr
 
 | Variable | Notes |
 | --- | --- |
-| `CONFLUENCE_BASE_URL` | e.g. `https://1dev.atlassian.net/wiki` (include `/wiki`) |
+| `CONFLUENCE_BASE_URL` | e.g. `https://your-site.atlassian.net/wiki` (include `/wiki`) |
 | `CONFLUENCE_EMAIL` | Atlassian account email that owns the API token |
 | `CONFLUENCE_API_TOKEN` | Create at https://id.atlassian.com/manage-profile/security/api-tokens |
-| `CONFLUENCE_PAGE_ID` | Numeric id of the tracker page (e.g. `407797761`) |
+| `CONFLUENCE_PAGE_ID` | Numeric id of the tracker page (e.g. `123456789`) |
 | `SLACK_WEBHOOK_URL` | A Slack incoming webhook URL for the target channel |
 
 For the GitHub Action the Dify credentials are read from secrets named
@@ -234,8 +234,8 @@ posts a Slack deletion notice. Deletion is permanent, so it is gated behind an e
 flag.
 
 The trashcan folder defaults to a sibling of `DSL_FOLDER_PATH` (e.g.
-`./dify-pelonis-workflows` → `./dify-pelonis-trashcan`); override it with
-`DSL_TRASHCAN_PATH`. It is git-ignored like the export folders.
+`./dsl` → `./dsl-trashcan`); override it with `DSL_TRASHCAN_PATH`. It is
+git-ignored like the export folders.
 
 ```bash
 ./run.sh prune            # list candidates only (safe, no deletion)
@@ -279,12 +279,33 @@ Or run the two processes separately:
 (cd frontend && npm run dev)    # frontend only (:3000)
 ```
 
-Add `SESSION_SECRET` (and optionally `ADMIN_ROLES` / `ADMIN_EMAILS`) to `.env` —
-see `.env.example`. All Dify/Confluence/Slack operations run as the service account
-configured in `.env`; the per-user login only controls access and role gating.
-
 Not yet included (planned later phases): persistent job history, in-app workflow
 health/analysis, and live Dify execution/runtime monitoring.
+
+### Self-hosting & configuration
+
+The web console is **single-tenant**: one deployment points at one Dify instance,
+one Confluence site, and one tracker page, all configured via `.env`. Every
+Dify/Confluence/Slack call runs as the service account in `.env`; the per-user
+login only controls access to the console and resolves roles. (It is not a
+multi-tenant SaaS — each team self-hosts its own instance.)
+
+Minimum config to run the console:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DIFY_ORIGIN`, `EMAIL`, `PASSWORD` | yes | Dify service account the app acts as |
+| `CONFLUENCE_BASE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_PAGE_ID` | yes | the tracker the dashboard reads/writes |
+| `SESSION_SECRET` | yes | signs login cookies — generate with `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`. If unset, a random per-process secret is used and logins won't survive a restart. |
+| `ADMIN_EMAILS` | recommended | comma-separated emails granted admin (prune / delete / settings / YAML export). Admin is **not** hardcoded — set this (or rely on the Dify `owner`/`admin` role via `ADMIN_ROLES`). |
+| `SLACK_WEBHOOK_URL` | optional | channel for status/deletion notices |
+| `SLACK_USER_MAP`, `SLACK_NAME_ALIASES` | optional | JSON maps of contributor name → Slack member ID, and alias → canonical name, for @-mentions |
+| `CONFLUENCE_DOCS_SPACE`, `CONFLUENCE_DOCS_PARENT_ID` | optional | enable "Generate & publish" docs; leave unset to disable doc publishing |
+| `AUTHOR_SUGGESTION_IGNORE_EMAILS` | optional | accounts to ignore when guessing a workflow's author (e.g. the bulk-import account) |
+
+See `.env.example` for the full annotated list. The connection settings (Dify,
+Confluence, Slack webhook) can also be edited at runtime from the in-app
+**Settings** tab (admin only); everything else is `.env`/env-var only.
 
 ### Deploy on a local server (Docker)
 
@@ -301,9 +322,9 @@ docker compose up -d --build
 Notes:
 
 - **Host networking** is used so the backend can resolve/reach Dify over your
-  Tailnet (MagicDNS names resolve via the host's `tailscaled`). This requires a
-  **Linux host**; Docker Desktop on macOS/Windows does not support
-  `network_mode: host`.
+  private network (e.g. NetBird/Tailscale names resolve via the host). This
+  requires a **Linux host**; Docker Desktop on macOS/Windows does not support
+  `network_mode: host` (on a Mac, run the app natively instead).
   - Bridge alternative (only if the server reaches Dify via normal DNS/routing):
     remove the two `network_mode: host` lines, add `ports: ["8008:8008"]` to
     `api` and `ports: ["3000:3000"]` to `web`, and set the `web` build arg +
@@ -338,7 +359,7 @@ that is easy to read and review:
 ./run.sh readable some/dir --out docs   # convert a folder into ./docs
 ```
 
-Reports are written to `./dify-pelonis-readable/` (override with `READABLE_FOLDER_PATH` or
+Reports are written to `./readable/` (override with `READABLE_FOLDER_PATH` or
 `--out`), one `.md` per workflow plus a `README.md` index. Because the reports embed the same
 prompts/code as the DSL, the output folder is gitignored by default.
 
@@ -354,8 +375,8 @@ source kept in a collapsible block for editing. Use `--diagrams code` to skip im
 and embed the raw Mermaid source as a code block instead.
 
 ```bash
-./run.sh readable --output confluence                       # all workflows -> default folder
-./run.sh readable --output confluence --space SIC --parent-id 423952430
+./run.sh readable --output confluence                       # all workflows -> configured folder
+./run.sh readable --output confluence --space YOURSPACE --parent-id 123456789
 ./run.sh readable --output confluence --diagrams code        # no image rendering
 ```
 
@@ -373,10 +394,9 @@ KROKI_URL=http://localhost:8000 ./run.sh readable --output confluence
 Diagram rendering is configurable via `KROKI_URL`, `KROKI_FORMAT` (`svg` default, or `png`),
 and `KROKI_TIMEOUT` (seconds; a slow render falls back to a Mermaid code block).
 
-- An **index page** ("Dify Workflows — Index") is created under the
-  **"Dify workflows documentation"** folder (`SIC` space, id `423952430` by default; override
-  with `--parent-id` / `--space` or the `CONFLUENCE_DOCS_PARENT_ID` / `CONFLUENCE_DOCS_SPACE`
-  env vars), and each **workflow doc is a sub-page of that index**.
+- An **index page** ("Dify Workflows — Index") is created under the docs folder you
+  configure via `--parent-id` / `--space` (or the `CONFLUENCE_DOCS_PARENT_ID` /
+  `CONFLUENCE_DOCS_SPACE` env vars), and each **workflow doc is a sub-page of that index**.
 - The index lists **every** doc page (not just the ones in the current run), so publishing a
   single workflow refreshes its page without shrinking the index.
 - Each doc page includes an **"Open in Dify"** link to the live workflow (resolved from the

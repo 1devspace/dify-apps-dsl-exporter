@@ -164,8 +164,14 @@ def _publish_doc(app_id: str, name: str | None) -> dict:
     with open(path, "wb") as fh:
         fh.write(body)
 
-    parent_id = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430")
-    space_key = os.getenv("CONFLUENCE_DOCS_SPACE", "SIC")
+    parent_id = os.getenv("CONFLUENCE_DOCS_PARENT_ID", "")
+    space_key = os.getenv("CONFLUENCE_DOCS_SPACE", "")
+    if not parent_id or not space_key:
+        return {
+            "ok": False,
+            "detail": "Doc publishing is not configured. Set CONFLUENCE_DOCS_PARENT_ID "
+            "and CONFLUENCE_DOCS_SPACE.",
+        }
     entries = dsl_readable.run_confluence([path], parent_id, space_key, tmp, "image")
     if entries:
         e = entries[0]

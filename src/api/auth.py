@@ -15,10 +15,6 @@ import dify_api
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# Always-privileged accounts, independent of Dify role / env config. For now this
-# guarantees the maintainer can run admin-only actions (prune, delete, settings).
-ALWAYS_ADMIN_EMAILS = {"aziz@1dev.space"}
-
 
 def _admin_roles() -> set[str]:
     return {
@@ -29,10 +25,10 @@ def _admin_roles() -> set[str]:
 
 
 def _admin_emails() -> set[str]:
-    emails = {
+    """Emails always treated as admin, regardless of Dify role. From ADMIN_EMAILS."""
+    return {
         e.strip().lower() for e in (os.getenv("ADMIN_EMAILS") or "").split(",") if e.strip()
     }
-    return emails | ALWAYS_ADMIN_EMAILS
 
 
 def _resolve_is_admin(user: dict) -> bool:

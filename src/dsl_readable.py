@@ -14,7 +14,7 @@ becomes ``{{Topic+subprompt.topic}}``.
 
 Usage:
     python src/dsl_readable.py                      # convert every workflow in
-                                                    # DSL_FOLDER_PATH -> ./dify-pelonis-readable
+                                                    # DSL_FOLDER_PATH -> ./readable
     python src/dsl_readable.py path/to/flow.yml     # convert one file (prints location)
     python src/dsl_readable.py DIR --out OUTDIR      # convert a folder into OUTDIR
 """
@@ -31,8 +31,8 @@ import yaml
 
 import confluence
 
-DSL_FOLDER_PATH = os.getenv("DSL_FOLDER_PATH", "./dify-pelonis-workflows").strip()
-DEFAULT_OUT = os.getenv("READABLE_FOLDER_PATH", "./dify-pelonis-readable").strip()
+DSL_FOLDER_PATH = os.getenv("DSL_FOLDER_PATH", "./dsl").strip()
+DEFAULT_OUT = os.getenv("READABLE_FOLDER_PATH", "./readable").strip()
 
 # Kroki renders Mermaid -> SVG/PNG so diagrams show up as real images in Confluence
 # (which has no native Mermaid support). Point KROKI_URL at a self-hosted instance for
@@ -913,10 +913,12 @@ def main() -> None:
                         help="local (Markdown files, default) or confluence (create/update pages).")
     parser.add_argument("--out", default=DEFAULT_OUT,
                         help=f"Output folder for local mode (default: {DEFAULT_OUT}).")
-    parser.add_argument("--parent-id", default=os.getenv("CONFLUENCE_DOCS_PARENT_ID", "423952430"),
-                        help="Confluence parent folder/page id for confluence mode.")
-    parser.add_argument("--space", default=os.getenv("CONFLUENCE_DOCS_SPACE", "SIC"),
-                        help="Confluence space key for confluence mode (default: SIC).")
+    parser.add_argument("--parent-id", default=os.getenv("CONFLUENCE_DOCS_PARENT_ID", ""),
+                        help="Confluence parent folder/page id for confluence mode "
+                             "(or set CONFLUENCE_DOCS_PARENT_ID).")
+    parser.add_argument("--space", default=os.getenv("CONFLUENCE_DOCS_SPACE", ""),
+                        help="Confluence space key for confluence mode "
+                             "(or set CONFLUENCE_DOCS_SPACE).")
     parser.add_argument("--diagrams", choices=["image", "code"], default="image",
                         help="confluence mode: render diagrams as images via Kroki (default) "
                              "or keep the raw Mermaid source as a code block.")

@@ -10,9 +10,13 @@ Confluence / Slack operations run as the service account configured in `.env`;
 the per-user login only authenticates access to this app and resolves roles.
 """
 
+import logging
 import os
+import secrets
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Make the sibling CLI modules (dify_api, confluence, ...) importable as
 # top-level modules whether we are launched via uvicorn --app-dir src or python.
@@ -39,9 +43,20 @@ from api import auth, jobs, settings, workflows
 
 app = FastAPI(title="Dify Workflow Console", version="0.1.0")
 
+# Never ship a known/default signing key (it would make sessions forgeable). If
+# unset, generate a random one for this process and warn — sessions then simply
+# don't survive a restart, which is the safe failure mode.
+_session_secret = os.getenv("SESSION_SECRET", "").strip()
+if not _session_secret:
+    _session_secret = secrets.token_urlsafe(48)
+    logger.warning(
+        "SESSION_SECRET is not set. Using a random per-process secret; logins "
+        "will not persist across restarts. Set SESSION_SECRET in .env."
+    )
+
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me"),
+    secret_key=_session_secret,
     same_site="lax",
     https_only=False,
 )

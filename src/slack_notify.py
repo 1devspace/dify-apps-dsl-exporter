@@ -27,26 +27,23 @@ def refresh() -> None:
     SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
 # Map tracker contributor names (lowercased) to Slack member IDs so the message
-# can @-mention people. Extend/override via the SLACK_USER_MAP env var (JSON like
-# {"name": "U012ABC"}). Names not found here are shown as plain text.
-NAME_TO_SLACK_ID: dict[str, str] = {
-    "hela": "U093LS8RV9A",
-    "aziz": "U093LS66LPN",
-    "abder": "U09TB187K7Y",
-    "farah": "U0AQ5QYD6LS",
-    "mouhanned": "U0A9Q5U1022",
-    "muhanned": "U0A9Q5U1022",
-    "mo": "U08HA856YVC",
-}
-
-# Normalise alternate contributor names to a canonical one before grouping, so
-# they merge into a single mention (e.g. "seneca center" is the same person as "mo").
-NAME_ALIASES: dict[str, str] = {
-    "seneca center": "mo",
-}
+# can @-mention people. Configure via the SLACK_USER_MAP env var (JSON like
+# {"name": "U012ABC"}). Names not found are shown as plain bold text.
+NAME_TO_SLACK_ID: dict[str, str] = {}
 try:
     NAME_TO_SLACK_ID.update(
         {k.lower(): v for k, v in json.loads(os.getenv("SLACK_USER_MAP", "{}")).items()}
+    )
+except (ValueError, AttributeError):
+    pass
+
+# Normalise alternate contributor names to a canonical one before grouping, so
+# they merge into a single mention (e.g. an alias is the same person as "mo").
+# Configure via SLACK_NAME_ALIASES (JSON like {"alias": "canonical"}).
+NAME_ALIASES: dict[str, str] = {}
+try:
+    NAME_ALIASES.update(
+        {k.lower(): str(v).lower() for k, v in json.loads(os.getenv("SLACK_NAME_ALIASES", "{}")).items()}
     )
 except (ValueError, AttributeError):
     pass
@@ -217,7 +214,7 @@ def build_deletion_messages(deleted: list[dict], failed: list[dict], page_url: s
         intro.append(
             _section(
                 ":floppy_disk: A YAML backup of each deleted workflow is kept locally "
-                "on Aziz's machine (the `dify-pelonis-trashcan` folder)."
+                "on the server (the trashcan folder)."
             )
         )
     sections: list[dict] = []

@@ -5,7 +5,7 @@ to the Confluence REST API directly with an API token, so it can run unattended
 (GitHub Actions, cron, etc.).
 
 Required environment variables:
-    CONFLUENCE_BASE_URL   e.g. https://1dev.atlassian.net/wiki
+    CONFLUENCE_BASE_URL   e.g. https://your-site.atlassian.net/wiki
     CONFLUENCE_EMAIL      Atlassian account email that owns the API token
     CONFLUENCE_API_TOKEN  API token from https://id.atlassian.com/manage-profile/security/api-tokens
     CONFLUENCE_PAGE_ID    Numeric id of the tracker page to keep in sync
