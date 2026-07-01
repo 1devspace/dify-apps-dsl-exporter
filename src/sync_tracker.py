@@ -23,10 +23,17 @@ import argparse
 import asyncio
 import html
 import os
+import threading
 from datetime import datetime, timezone
 
 import httpx
 from bs4 import BeautifulSoup
+
+# Serialise all single-cell writes to the tracker page. Each writer does a
+# read-modify-write on the same Confluence page; without this, two near-
+# simultaneous edits (e.g. optimistic UI saves) would read the same version and
+# the second write would 409. The lock keeps each edit reading a fresh version.
+_write_lock = threading.Lock()
 
 import confluence
 import dify_api
@@ -100,8 +107,12 @@ def parse_existing_rows(storage: str) -> tuple[str, list[dict]]:
             continue
         name = cells[1].get_text(strip=True) if len(cells) > 1 else ""
         tags = cells[3].get_text(strip=True) if len(cells) > 3 else ""
+        working = _status_title(cells[4]).strip() if len(cells) > 4 else ""
         decision = _status_title(cells[5]).strip() if len(cells) > 5 else ""
         author = cells[6].get_text(strip=True) if len(cells) > 6 else ""
+        created = cells[7].get_text(strip=True) if len(cells) > 7 else ""
+        updated = cells[8].get_text(strip=True) if len(cells) > 8 else ""
+        notes = cells[9].get_text(" ", strip=True) if len(cells) > 9 else ""
         link_tag = tr.find("a")
         url = link_tag.get("href") if link_tag else workflow_url(app_id)
         is_done = _status_title(cells[0]).strip().upper() == "TRUE"
@@ -110,8 +121,12 @@ def parse_existing_rows(storage: str) -> tuple[str, list[dict]]:
                 "app_id": app_id,
                 "name": name,
                 "tags": tags,
+                "working": working,
                 "decision": decision,
                 "author": author,
+                "created": created,
+                "updated": updated,
+                "notes": notes,
                 "url": url,
                 "is_done": is_done,
                 "html": str(tr),
@@ -126,40 +141,41 @@ def assign_author(client: httpx.Client, app_id: str, author: str) -> bool:
     Returns False if the app has no row on the tracker yet (e.g. still "New").
     """
     page_id = confluence.CONFLUENCE_PAGE_ID
-    page = confluence.get_page(client, page_id)
-    soup = BeautifulSoup(page["storage"], "html.parser")
-    table = soup.find("table")
-    if table is None:
-        raise RuntimeError("Tracker page has no table; cannot assign author.")
+    with _write_lock:
+        page = confluence.get_page(client, page_id)
+        soup = BeautifulSoup(page["storage"], "html.parser")
+        table = soup.find("table")
+        if table is None:
+            raise RuntimeError("Tracker page has no table; cannot assign author.")
 
-    target = None
-    for tr in table.find_all("tr"):
-        if tr.find("th") is not None:
-            continue
-        cells = tr.find_all("td")
-        if not cells:
-            continue
-        if cells[-1].get_text(strip=True) == app_id:
-            target = cells
-            break
+        target = None
+        for tr in table.find_all("tr"):
+            if tr.find("th") is not None:
+                continue
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            if cells[-1].get_text(strip=True) == app_id:
+                target = cells
+                break
 
-    if target is None or len(target) <= 6:
-        return False
+        if target is None or len(target) <= 6:
+            return False
 
-    author_cell = target[6]
-    author_cell.clear()
-    p = soup.new_tag("p")
-    p.string = author
-    author_cell.append(p)
+        author_cell = target[6]
+        author_cell.clear()
+        p = soup.new_tag("p")
+        p.string = author
+        author_cell.append(p)
 
-    confluence.update_page(
-        client,
-        page_id,
-        page["title"],
-        str(soup),
-        page["version"],
-        f"Assign author '{author}' to {app_id}",
-    )
+        confluence.update_page(
+            client,
+            page_id,
+            page["title"],
+            str(soup),
+            page["version"],
+            f"Assign author '{author}' to {app_id}",
+        )
     return True
 
 
@@ -180,34 +196,107 @@ def remove_author(client: httpx.Client, app_id: str, author: str) -> bool:
     Returns False if the app has no row on the tracker yet.
     """
     page_id = confluence.CONFLUENCE_PAGE_ID
-    page = confluence.get_page(client, page_id)
-    soup = BeautifulSoup(page["storage"], "html.parser")
-    table = soup.find("table")
-    if table is None:
-        raise RuntimeError("Tracker page has no table; cannot edit author.")
+    with _write_lock:
+        page = confluence.get_page(client, page_id)
+        soup = BeautifulSoup(page["storage"], "html.parser")
+        table = soup.find("table")
+        if table is None:
+            raise RuntimeError("Tracker page has no table; cannot edit author.")
 
-    cells = _find_row_cells(table, app_id)
-    if cells is None or len(cells) <= 6:
-        return False
+        cells = _find_row_cells(table, app_id)
+        if cells is None or len(cells) <= 6:
+            return False
 
-    author_cell = cells[6]
-    current = [p.strip() for p in author_cell.get_text().split(",") if p.strip()]
-    remaining = [p for p in current if p.lower() != author.strip().lower()]
+        author_cell = cells[6]
+        current = [p.strip() for p in author_cell.get_text().split(",") if p.strip()]
+        remaining = [p for p in current if p.lower() != author.strip().lower()]
 
-    author_cell.clear()
-    p = soup.new_tag("p")
-    p.string = ", ".join(remaining)
-    author_cell.append(p)
+        author_cell.clear()
+        p = soup.new_tag("p")
+        p.string = ", ".join(remaining)
+        author_cell.append(p)
 
-    confluence.update_page(
-        client,
-        page_id,
-        page["title"],
-        str(soup),
-        page["version"],
-        f"Remove author '{author}' from {app_id}",
-    )
+        confluence.update_page(
+            client,
+            page_id,
+            page["title"],
+            str(soup),
+            page["version"],
+            f"Remove author '{author}' from {app_id}",
+        )
     return True
+
+
+# Canonical governance vocabularies + lozenge colours, matching the tracker.
+DECISION_COLOURS = {
+    "keep": confluence.COLOUR_GREEN,
+    "delete": confluence.COLOUR_RED,
+    "pending": confluence.COLOUR_GREY,
+    "review": confluence.COLOUR_YELLOW,
+}
+WORKING_COLOURS = {
+    "working": confluence.COLOUR_GREEN,
+    "has some bugs": confluence.COLOUR_YELLOW,
+    "not working": confluence.COLOUR_RED,
+}
+
+
+def _set_row_cell(
+    client: httpx.Client, app_id: str, index: int, inner_html: str, message: str
+) -> bool:
+    """Replace one cell (by column index) of a tracked row, preserving the rest.
+
+    ``inner_html`` is storage-format markup placed inside a fresh ``<p>`` (a
+    status macro, escaped text, or empty to clear). Returns False if the app has
+    no row on the tracker yet.
+    """
+    page_id = confluence.CONFLUENCE_PAGE_ID
+    with _write_lock:
+        page = confluence.get_page(client, page_id)
+        soup = BeautifulSoup(page["storage"], "html.parser")
+        table = soup.find("table")
+        if table is None:
+            raise RuntimeError("Tracker page has no table; cannot edit row.")
+
+        cells = _find_row_cells(table, app_id)
+        if cells is None or len(cells) <= index:
+            return False
+
+        cell = cells[index]
+        cell.clear()
+        fragment = BeautifulSoup(f"<p>{inner_html}</p>", "html.parser")
+        cell.append(fragment)
+
+        confluence.update_page(
+            client, page_id, page["title"], str(soup), page["version"], message
+        )
+    return True
+
+
+def set_decision(client: httpx.Client, app_id: str, value: str) -> bool:
+    """Set the Decision cell (col 5) to a coloured status lozenge (empty clears it)."""
+    value = (value or "").strip()
+    inner = ""
+    if value:
+        colour = DECISION_COLOURS.get(value.lower(), confluence.COLOUR_GREY)
+        inner = confluence.status_macro(value, colour)
+    return _set_row_cell(client, app_id, 5, inner, f"Set decision '{value}' for {app_id}")
+
+
+def set_working(client: httpx.Client, app_id: str, value: str) -> bool:
+    """Set the Working? cell (col 4) to a coloured status lozenge (empty clears it)."""
+    value = (value or "").strip()
+    inner = ""
+    if value:
+        colour = WORKING_COLOURS.get(value.lower(), confluence.COLOUR_GREY)
+        inner = confluence.status_macro(value, colour)
+    return _set_row_cell(client, app_id, 4, inner, f"Set working '{value}' for {app_id}")
+
+
+def set_notes(client: httpx.Client, app_id: str, notes: str) -> bool:
+    """Set the Notes cell (col 9) to plain text (empty clears it)."""
+    notes = notes or ""
+    return _set_row_cell(client, app_id, 9, html.escape(notes), f"Update notes for {app_id}")
 
 
 def update_row_name(row_html: str, new_name: str) -> str:

@@ -39,6 +39,13 @@ def _safe_filename(name: str) -> str:
 
 
 def _build_dashboard() -> dict:
+    """Build the governance dashboard.
+
+    Governance fields (decision, working, notes, owner, "informations added")
+    are read from the Confluence tracker — the source of truth that users edit
+    in the app and that writes straight back to Confluence. Environment tags are
+    read live from Dify (their authoritative home), so tag edits show up at once.
+    """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     dify_apps = asyncio.run(sync_tracker.fetch_dify_apps())
     dify_by_id = {a["id"]: a for a in dify_apps if a.get("id")}
@@ -52,20 +59,24 @@ def _build_dashboard() -> dict:
     for row in existing_rows:
         app = dify_by_id.get(row["app_id"])
         live = app is not None
-        tags = row.get("tags", "")
+        # Env tags: prefer the live Dify value (authoritative); fall back to the
+        # tracker's column only for rows no longer in Dify.
+        tags = (app.get("tags") if app else "") or row.get("tags", "")
+        # Dates: live Dify timestamps are authoritative; removed rows keep the
+        # last-synced dates from the tracker.
+        created = sync_tracker.ts_to_date(app.get("created_at")) if app else row.get("created", "")
+        updated = sync_tracker.ts_to_date(app.get("updated_at")) if app else row.get("updated", "")
         records.append(
             {
                 "app_id": row["app_id"],
-                # Dify owns the workflow name: prefer the live name so renames in
-                # Dify show up immediately (tracker name is only a fallback, e.g.
-                # for workflows removed from Dify).
                 "name": (app.get("name") if app else "") or row["name"],
-                # Tracker's assigned owner only. We intentionally do NOT fall back
-                # to the Dify creator, otherwise unassigning yourself as the sole
-                # author would "reappear" from the Dify author_name.
                 "author": row["author"],
                 "tags": tags,
                 "decision": row.get("decision", ""),
+                "working": row.get("working", ""),
+                "notes": row.get("notes", ""),
+                "created_at": created,
+                "updated_at": updated,
                 "url": row.get("url", ""),
                 "informations_added": row.get("is_done", False),
                 "missing_env_tag": not sync_tracker.has_env_tag(tags),
@@ -87,6 +98,10 @@ def _build_dashboard() -> dict:
                 "author": app.get("author", ""),
                 "tags": tags,
                 "decision": "",
+                "working": "",
+                "notes": "",
+                "created_at": sync_tracker.ts_to_date(app.get("created_at")),
+                "updated_at": sync_tracker.ts_to_date(app.get("updated_at")),
                 "url": sync_tracker.workflow_url(app["id"]),
                 "informations_added": False,
                 "missing_env_tag": not sync_tracker.has_env_tag(tags),
@@ -129,9 +144,8 @@ async def list_workflows(user: dict = Depends(require_auth)) -> dict:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Couldn't reach Confluence (DNS/network). This is usually a "
-                "transient VPN/DNS blip — check NetBird and retry. "
-                f"({exc})"
+                "Couldn't reach Dify or Confluence (DNS/network). This is usually "
+                f"a transient VPN/DNS blip — check NetBird and retry. ({exc})"
             ),
         ) from exc
 
@@ -228,8 +242,8 @@ class EnvTagsBody(BaseModel):
 async def add_env_tags(app_id: str, body: EnvTagsBody, user: dict = Depends(require_auth)) -> dict:
     """Bind one or more environment tags (prod/dev/test) to a Dify app.
 
-    Additive only (matches sync_env_tags): never unbinds existing tags. Missing
-    global tags are created automatically.
+    Additive only: never unbinds existing tags. Missing global tags are created
+    automatically.
     """
     wanted = {t.strip().lower() for t in body.tags if t.strip()} & ENV_TAGS
     if not wanted:
@@ -252,6 +266,13 @@ class AuthorBody(BaseModel):
     author: str = ""
 
 
+def _not_on_tracker() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Workflow is not on the tracker yet. Run Sync first, then edit it.",
+    )
+
+
 @router.post("/{app_id}/author")
 async def assign_author(
     app_id: str, body: AuthorBody, user: dict = Depends(require_auth)
@@ -262,15 +283,11 @@ async def assign_author(
         raise HTTPException(status_code=400, detail="No author name available")
 
     def _do() -> bool:
-        with httpx.Client(timeout=60) as client:
+        with _confluence_client(60) as client:
             return sync_tracker.assign_author(client, app_id, name)
 
-    ok = await asyncio.to_thread(_do)
-    if not ok:
-        raise HTTPException(
-            status_code=409,
-            detail="Workflow is not on the tracker yet. Run Sync first, then assign.",
-        )
+    if not await asyncio.to_thread(_do):
+        raise _not_on_tracker()
     return {"ok": True, "author": name}
 
 
@@ -284,13 +301,70 @@ async def unassign_author(
         raise HTTPException(status_code=400, detail="No author name available")
 
     def _do() -> bool:
-        with httpx.Client(timeout=60) as client:
+        with _confluence_client(60) as client:
             return sync_tracker.remove_author(client, app_id, name)
 
-    ok = await asyncio.to_thread(_do)
-    if not ok:
+    if not await asyncio.to_thread(_do):
         raise HTTPException(status_code=409, detail="Workflow is not on the tracker.")
     return {"ok": True, "removed": name}
+
+
+# Allowed governance values, matching the Confluence tracker vocabulary.
+DECISION_VALUES = {"keep", "delete", "pending", "review"}
+WORKING_VALUES = {"working", "has some bugs", "not working"}
+
+
+class ValueBody(BaseModel):
+    value: str = ""
+
+
+@router.post("/{app_id}/decision")
+async def set_decision(app_id: str, body: ValueBody, user: dict = Depends(require_auth)) -> dict:
+    """Set the tracker Decision cell (Keep / Delete / Pending). Empty clears it."""
+    value = body.value.strip()
+    if value and value.lower() not in DECISION_VALUES:
+        raise HTTPException(status_code=400, detail="Invalid decision value")
+
+    def _do() -> bool:
+        with _confluence_client(60) as client:
+            return sync_tracker.set_decision(client, app_id, value)
+
+    if not await asyncio.to_thread(_do):
+        raise _not_on_tracker()
+    return {"ok": True, "decision": value}
+
+
+@router.post("/{app_id}/working")
+async def set_working(app_id: str, body: ValueBody, user: dict = Depends(require_auth)) -> dict:
+    """Set the tracker Working? cell (Working / Has some bugs / Not working). Empty clears it."""
+    value = body.value.strip()
+    if value and value.lower() not in WORKING_VALUES:
+        raise HTTPException(status_code=400, detail="Invalid working value")
+
+    def _do() -> bool:
+        with _confluence_client(60) as client:
+            return sync_tracker.set_working(client, app_id, value)
+
+    if not await asyncio.to_thread(_do):
+        raise _not_on_tracker()
+    return {"ok": True, "working": value}
+
+
+class NotesBody(BaseModel):
+    notes: str = ""
+
+
+@router.post("/{app_id}/notes")
+async def set_notes(app_id: str, body: NotesBody, user: dict = Depends(require_auth)) -> dict:
+    """Store free-form notes in the tracker Notes cell."""
+
+    def _do() -> bool:
+        with _confluence_client(60) as client:
+            return sync_tracker.set_notes(client, app_id, body.notes)
+
+    if not await asyncio.to_thread(_do):
+        raise _not_on_tracker()
+    return {"ok": True, "notes": body.notes}
 
 
 @router.delete("/{app_id}/env-tags/{env}")

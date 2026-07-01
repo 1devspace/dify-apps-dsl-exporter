@@ -14,6 +14,10 @@ export type WorkflowRecord = {
   author: string;
   tags: string;
   decision: string;
+  working: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
   url: string;
   informations_added: boolean;
   missing_env_tag: boolean;
@@ -142,6 +146,21 @@ export const api = {
       "/api/workflows/author-suggestions",
       { method: "POST", body: JSON.stringify({ app_ids: appIds }) }
     ),
+  setDecision: (appId: string, value: string) =>
+    req<{ ok: boolean; decision: string }>(`/api/workflows/${appId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    }),
+  setWorking: (appId: string, value: string) =>
+    req<{ ok: boolean; working: string }>(`/api/workflows/${appId}/working`, {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    }),
+  setNotes: (appId: string, notes: string) =>
+    req<{ ok: boolean; notes: string }>(`/api/workflows/${appId}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
   deleteWorkflow: (appId: string) =>
     req<{ ok: boolean }>(`/api/workflows/${appId}`, { method: "DELETE" }),
   readable: (appId: string, name: string) =>

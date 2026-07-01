@@ -3,21 +3,24 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
-import { api, ApiError, AuthorSuggestion, Dashboard, Job, User, WorkflowRecord } from "@/lib/api";
+import { api, ApiError, AuthorSuggestion, Dashboard, Job, Summary, User, WorkflowRecord } from "@/lib/api";
 import JobDrawer from "@/components/JobDrawer";
 import PruneModal from "@/components/PruneModal";
 import BrandLockup from "@/components/BrandLockup";
 import SettingsPanel from "@/components/SettingsPanel";
 import LogoMark from "@/components/LogoMark";
 
-type SortKey = "name" | "author" | "decision" | "status";
-type ColKey = "source" | "author" | "env" | "decision" | "status";
+type SortKey = "name" | "author" | "decision" | "status" | "created" | "updated";
+type ColKey = "source" | "author" | "env" | "decision" | "working" | "status";
 type ColFilters = Record<ColKey, Set<string>>;
 type Toast = { id: string; message: string; kind: "success" | "error" | "info" };
 type Option = { value: string; label: string };
 
 const NONE = "(none)";
 const ENV_TAGS = ["prod", "dev", "test"];
+// Governance vocabularies, matching the Confluence tracker lozenges.
+const DECISION_VALUES = ["Keep", "Delete", "Pending"];
+const WORKING_VALUES = ["Working", "Has some bugs", "Not working"];
 
 const ENV_STYLES: Record<string, string> = {
   prod: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -26,7 +29,14 @@ const ENV_STYLES: Record<string, string> = {
 };
 
 function emptyColFilters(): ColFilters {
-  return { source: new Set(), author: new Set(), env: new Set(), decision: new Set(), status: new Set() };
+  return {
+    source: new Set(),
+    author: new Set(),
+    env: new Set(),
+    decision: new Set(),
+    working: new Set(),
+    status: new Set(),
+  };
 }
 
 function anyFilterActive(cf: ColFilters): number {
@@ -44,8 +54,27 @@ function statusRank(r: WorkflowRecord): number {
   return s === "removed" ? 2 : s === "done" ? 1 : 0;
 }
 
+function rowWorking(r: WorkflowRecord): string {
+  return r.working?.trim() || NONE;
+}
+
 function rowSource(r: WorkflowRecord): "new" | "tracked" {
   return r.source === "new" ? "new" : "tracked";
+}
+
+// Recompute summary counts client-side after an optimistic edit, mirroring the
+// backend so the stat cards stay accurate without a full refetch.
+function recomputeSummary(records: WorkflowRecord[]): Summary {
+  const live = records.filter((r) => r.live_in_dify);
+  return {
+    total_records: records.length,
+    live: live.length,
+    new: records.filter((r) => r.source === "new").length,
+    removed_from_dify: records.filter((r) => r.removed_from_dify).length,
+    pending: live.filter((r) => !r.informations_added).length,
+    missing_env_tag: live.filter((r) => r.missing_env_tag).length,
+    marked_delete: live.filter((r) => r.decision.trim().toLowerCase() === "delete").length,
+  };
 }
 
 // Tracker cells sometimes use placeholder text instead of a blank author.
@@ -76,6 +105,7 @@ function rowMatches(r: WorkflowRecord, cf: ColFilters): boolean {
   if (cf.source.size && !cf.source.has(rowSource(r))) return false;
   if (cf.author.size && !rowAuthors(r).some((a) => cf.author.has(a))) return false;
   if (cf.decision.size && !cf.decision.has(rowDecision(r))) return false;
+  if (cf.working.size && !cf.working.has(rowWorking(r))) return false;
   if (cf.env.size && !rowEnvs(r).some((e) => cf.env.has(e))) return false;
   if (cf.status.size) {
     if (!cf.status.has(rowStatus(r))) return false;
@@ -218,6 +248,18 @@ export default function DashboardPage() {
     }
   }, [router]);
 
+  // Optimistic in-place update of a single record (used by inline edits so the
+  // UI reacts instantly while the Confluence write happens in the background).
+  const patchRecord = useCallback((appId: string, partial: Partial<WorkflowRecord>) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const records = prev.records.map((r) =>
+        r.app_id === appId ? { ...r, ...partial } : r
+      );
+      return { ...prev, records, summary: recomputeSummary(records) };
+    });
+  }, []);
+
   // Best-effort: which workflows already have a published Confluence doc.
   const loadDocLinks = useCallback(async () => {
     try {
@@ -332,24 +374,25 @@ export default function DashboardPage() {
 
   const options = useMemo(() => {
     const authors = new Set<string>();
-    const decisions = new Set<string>();
     const sources = new Set<string>();
     let hasNoAuthor = false;
     let hasNoDecision = false;
+    let hasNoWorking = false;
     for (const r of records) {
       const names = splitAuthors(r.author);
       if (names.length) names.forEach((n) => authors.add(n));
       else hasNoAuthor = true;
-      const d = r.decision?.trim();
-      if (d) decisions.add(d);
-      else hasNoDecision = true;
+      if (!r.decision?.trim()) hasNoDecision = true;
+      if (!r.working?.trim()) hasNoWorking = true;
       sources.add(rowSource(r));
     }
     const sortStr = (arr: string[]) => arr.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
     const author: Option[] = sortStr([...authors]).map((v) => ({ value: v, label: v }));
     if (hasNoAuthor) author.push({ value: NONE, label: "— none —" });
-    const decision: Option[] = sortStr([...decisions]).map((v) => ({ value: v, label: v }));
+    const decision: Option[] = DECISION_VALUES.map((v) => ({ value: v, label: v }));
     if (hasNoDecision) decision.push({ value: NONE, label: "— none —" });
+    const working: Option[] = WORKING_VALUES.map((v) => ({ value: v, label: v }));
+    if (hasNoWorking) working.push({ value: NONE, label: "— none —" });
     const source: Option[] = [
       { value: "tracked", label: "Tracked" },
       { value: "new", label: "New" },
@@ -365,7 +408,7 @@ export default function DashboardPage() {
       { value: "done", label: "Done" },
       { value: "removed", label: "Removed" },
     ];
-    return { author, decision, source, env, status };
+    return { author, decision, working, source, env, status };
   }, [records]);
 
   const deleteVals = useMemo(
@@ -393,13 +436,26 @@ export default function DashboardPage() {
       return rowMatches(r, colFilters);
     });
     const dir = sort.dir === "asc" ? 1 : -1;
+    const field = (r: WorkflowRecord) =>
+      sort.key === "name"
+        ? r.name
+        : sort.key === "author"
+          ? r.author
+          : sort.key === "created"
+            ? r.created_at
+            : sort.key === "updated"
+              ? r.updated_at
+              : r.decision;
     out.sort((a, b) => {
       let cmp = 0;
       if (sort.key === "status") cmp = statusRank(a) - statusRank(b);
       else {
-        const av = (sort.key === "name" ? a.name : sort.key === "author" ? a.author : a.decision) || "";
-        const bv = (sort.key === "name" ? b.name : sort.key === "author" ? b.author : b.decision) || "";
-        cmp = av.localeCompare(bv, undefined, { sensitivity: "base" });
+        // ISO dates (YYYY-MM-DD) sort correctly as plain strings; blanks last.
+        const av = field(a) || "";
+        const bv = field(b) || "";
+        if (!av && bv) cmp = 1;
+        else if (av && !bv) cmp = -1;
+        else cmp = av.localeCompare(bv, undefined, { sensitivity: "base" });
       }
       return cmp !== 0 ? cmp * dir : a.name.localeCompare(b.name);
     });
@@ -676,14 +732,15 @@ export default function DashboardPage() {
                     onToggle={(v) => toggleColFilter("decision", v)}
                   />
                   <ColHeader
-                    label="Status"
-                    k="status"
+                    label="Working"
+                    options={options.working}
+                    selected={colFilters.working}
+                    onToggle={(v) => toggleColFilter("working", v)}
                     sort={sort}
                     onSort={toggleSort}
-                    options={options.status}
-                    selected={colFilters.status}
-                    onToggle={(v) => toggleColFilter("status", v)}
                   />
+                  <ColHeader label="Created" k="created" sort={sort} onSort={toggleSort} />
+                  <ColHeader label="Updated" k="updated" sort={sort} onSort={toggleSort} />
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -699,12 +756,13 @@ export default function DashboardPage() {
                     suggestion={suggestions[r.app_id]}
                     onGenerate={() => startDoc(r.app_id, r.name)}
                     onChanged={loadData}
+                    onPatch={patchRecord}
                     onToast={pushToast}
                   />
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-16 text-center">
+                    <td colSpan={8} className="px-4 py-16 text-center">
                       <div className="flex flex-col items-center gap-1 text-slate-400">
                         <SearchIcon className="h-6 w-6 text-slate-300" />
                         <p className="text-sm font-medium text-slate-500">No workflows match</p>
@@ -1310,20 +1368,6 @@ function Toaster({
   );
 }
 
-function StatusPill({ removed, done }: { removed: boolean; done: boolean }) {
-  const { dot, text, label } = removed
-    ? { dot: "bg-red-500", text: "text-red-700", label: "removed" }
-    : done
-      ? { dot: "bg-emerald-500", text: "text-emerald-700", label: "done" }
-      : { dot: "bg-amber-500", text: "text-amber-700", label: "pending" };
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
-      {label}
-    </span>
-  );
-}
-
 function SearchIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -1566,6 +1610,164 @@ function TrashIcon({ className }: { className?: string }) {
   );
 }
 
+function GovSelect({
+  value,
+  options,
+  disabled,
+  danger,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  disabled?: boolean;
+  danger?: string;
+  onChange: (v: string) => void;
+}) {
+  const isDanger = !!value && !!danger && value.toLowerCase() === danger.toLowerCase();
+  const hasValue = !!value;
+  // Preserve any pre-existing tracker value that isn't in our canonical list.
+  const allOptions = value && !options.some((o) => o.toLowerCase() === value.toLowerCase())
+    ? [value, ...options]
+    : options;
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      title="Click to change"
+      className={`cursor-pointer rounded-md border px-1.5 py-1 text-xs font-medium transition focus:outline-none focus:ring-1 focus:ring-brand disabled:cursor-not-allowed disabled:opacity-50 ${
+        isDanger
+          ? "border-red-200 bg-red-50 text-red-700"
+          : hasValue
+            ? "border-slate-200 bg-slate-50 text-slate-700"
+            : "border-dashed border-slate-300 bg-transparent text-slate-400"
+      }`}
+    >
+      <option value="">—</option>
+      {allOptions.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function NoteIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={className}
+    >
+      <path d="M4 4h16v12H8l-4 4z" />
+      <path d="M8 9h8M8 12.5h5" />
+    </svg>
+  );
+}
+
+function NotesButton({
+  notes,
+  busy,
+  onSave,
+}: {
+  notes: string;
+  busy?: boolean;
+  onSave: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [draft, setDraft] = useState(notes);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setDraft(notes);
+    const rect = btnRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 6, left: rect.right });
+    setOpen(true);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+    };
+  }, [open]);
+
+  const hasNotes = !!notes.trim();
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggle();
+        }}
+        title={hasNotes ? "Edit notes" : "Add notes"}
+        className={`transition ${hasNotes ? "text-brand hover:opacity-70" : "text-slate-400 hover:text-brand"}`}
+      >
+        <NoteIcon className="h-4 w-4" />
+      </button>
+      {open &&
+        pos &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ top: pos.top, left: pos.left }}
+            className="fixed z-[70] w-72 -translate-x-full rounded-lg border border-slate-200 bg-white p-2 shadow-lg"
+          >
+            <textarea
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={4}
+              placeholder="Notes / what this workflow does…"
+              className="w-full resize-y rounded border border-slate-200 p-2 text-xs text-slate-700 focus:border-brand focus:outline-none"
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded px-2 py-1 text-xs text-slate-500 transition hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => {
+                  onSave(draft);
+                  setOpen(false);
+                }}
+                className="rounded bg-brand px-2.5 py-1 text-xs font-medium text-white transition hover:bg-brand-dark disabled:opacity-50"
+              >
+                Save
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
 function Row({
   r,
   isAdmin,
@@ -1575,6 +1777,7 @@ function Row({
   suggestion,
   onGenerate,
   onChanged,
+  onPatch,
   onToast,
 }: {
   r: WorkflowRecord;
@@ -1585,6 +1788,7 @@ function Row({
   suggestion?: AuthorSuggestion;
   onGenerate: () => void;
   onChanged: () => void;
+  onPatch: (appId: string, partial: Partial<WorkflowRecord>) => void;
   onToast: (msg: string, kind: Toast["kind"]) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1599,56 +1803,110 @@ function Row({
     return (n && n === meName.trim().toLowerCase()) || (myLocal && n === myLocal);
   };
 
-  async function addEnv(env: string) {
+  // Optimistic edit: patch the row instantly, write to Confluence in the
+  // background, confirm with a subtle toast, and roll back on failure.
+  async function persist(
+    optimistic: Partial<WorkflowRecord>,
+    rollback: Partial<WorkflowRecord>,
+    call: () => Promise<unknown>,
+    okMsg: string,
+    failMsg: string
+  ) {
+    onPatch(r.app_id, optimistic);
     setBusy(true);
     try {
-      await api.addEnvTags(r.app_id, [env]);
-      onToast(`Tagged "${r.name}" as ${env}`, "success");
-      onChanged();
+      await call();
+      onToast(okMsg, "success");
     } catch (e) {
-      onToast(e instanceof Error ? e.message : "Failed to add tag", "error");
+      onPatch(r.app_id, rollback);
+      onToast(e instanceof Error ? e.message : failMsg, "error");
     } finally {
       setBusy(false);
     }
+  }
+
+  function tagTokens(s: string): string[] {
+    return (s || "").split(",").map((t) => t.trim()).filter(Boolean);
+  }
+
+  async function addEnv(env: string) {
+    const tokens = tagTokens(r.tags);
+    const next = tokens.some((t) => t.toLowerCase() === env) ? tokens : [...tokens, env];
+    const tags = next.join(", ");
+    await persist(
+      { tags, missing_env_tag: !envBadges(tags).length },
+      { tags: r.tags, missing_env_tag: r.missing_env_tag },
+      () => api.addEnvTags(r.app_id, [env]),
+      `Tagged "${r.name}" as ${env} · synced`,
+      "Failed to add tag"
+    );
   }
 
   async function removeEnv(env: string) {
-    setBusy(true);
-    try {
-      await api.removeEnvTag(r.app_id, env);
-      onToast(`Removed ${env} tag from "${r.name}"`, "success");
-      onChanged();
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : "Failed to remove tag", "error");
-    } finally {
-      setBusy(false);
-    }
+    const tags = tagTokens(r.tags)
+      .filter((t) => t.toLowerCase() !== env.toLowerCase())
+      .join(", ");
+    await persist(
+      { tags, missing_env_tag: !envBadges(tags).length },
+      { tags: r.tags, missing_env_tag: r.missing_env_tag },
+      () => api.removeEnvTag(r.app_id, env),
+      `Removed ${env} tag from "${r.name}" · synced`,
+      "Failed to remove tag"
+    );
   }
 
   async function assign(name = "") {
-    setBusy(true);
-    try {
-      const res = await api.assignAuthor(r.app_id, name);
-      onToast(`Assigned "${r.name}" to ${res.author}`, "success");
-      onChanged();
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : "Failed to assign author", "error");
-    } finally {
-      setBusy(false);
-    }
+    const resolved = name.trim() || meName || meEmail || "me";
+    await persist(
+      { author: resolved },
+      { author: r.author },
+      () => api.assignAuthor(r.app_id, name),
+      `Assigned "${r.name}" to ${resolved} · synced`,
+      "Failed to assign author"
+    );
   }
 
   async function unassign(name: string) {
-    setBusy(true);
-    try {
-      await api.unassignAuthor(r.app_id, name);
-      onToast(`Removed ${name} from "${r.name}"`, "success");
-      onChanged();
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : "Failed to remove author", "error");
-    } finally {
-      setBusy(false);
-    }
+    const remaining = splitAuthors(r.author)
+      .filter((a) => a.toLowerCase() !== name.trim().toLowerCase())
+      .join(", ");
+    await persist(
+      { author: remaining },
+      { author: r.author },
+      () => api.unassignAuthor(r.app_id, name),
+      `Removed ${name} from "${r.name}" · synced`,
+      "Failed to remove author"
+    );
+  }
+
+  async function changeDecision(value: string) {
+    await persist(
+      { decision: value },
+      { decision: r.decision },
+      () => api.setDecision(r.app_id, value),
+      value ? `Decision → ${value} · synced` : `Decision cleared · synced`,
+      "Failed to set decision"
+    );
+  }
+
+  async function changeWorking(value: string) {
+    await persist(
+      { working: value },
+      { working: r.working },
+      () => api.setWorking(r.app_id, value),
+      value ? `Working → ${value} · synced` : `Working cleared · synced`,
+      "Failed to set working"
+    );
+  }
+
+  async function saveNotes(notes: string) {
+    await persist(
+      { notes },
+      { notes: r.notes },
+      () => api.setNotes(r.app_id, notes),
+      `Saved notes for "${r.name}" · synced`,
+      "Failed to save notes"
+    );
   }
 
   async function remove() {
@@ -1788,25 +2046,32 @@ function Row({
         </div>
       </td>
       <td className="px-4 py-3">
-        {r.decision ? (
-          <span
-            className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
-              r.decision.trim().toLowerCase() === "delete"
-                ? "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200"
-                : "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {r.decision}
-          </span>
-        ) : (
-          <span className="text-slate-300">—</span>
-        )}
+        <GovSelect
+          value={r.decision.trim()}
+          options={DECISION_VALUES}
+          disabled={busy || !canEdit}
+          danger="Delete"
+          onChange={changeDecision}
+        />
       </td>
       <td className="px-4 py-3">
-        <StatusPill removed={r.removed_from_dify} done={r.informations_added} />
+        <GovSelect
+          value={r.working.trim()}
+          options={WORKING_VALUES}
+          disabled={busy || !canEdit}
+          danger="Not working"
+          onChange={changeWorking}
+        />
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-slate-500">
+        {r.created_at || "—"}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-xs tabular-nums text-slate-500">
+        {r.updated_at || "—"}
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+          {canEdit && <NotesButton notes={r.notes} busy={busy} onSave={saveNotes} />}
           {canEdit && <DocMenu docUrl={docUrl} onGenerate={onGenerate} />}
           {r.url && (
             <a
