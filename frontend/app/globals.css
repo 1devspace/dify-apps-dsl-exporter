@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+  background-image: radial-gradient(60rem 60rem at 110% -10%, #eef2ff 0%, transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Consistent keyboard focus treatment */
+*:focus-visible {
+  @apply outline-none ring-2 ring-brand/40;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Lightweight typography for rendered readable docs */
+.readable h1 {
+  @apply mb-3 mt-1 text-2xl font-semibold text-slate-900;
+}
+.readable h2 {
+  @apply mb-2 mt-6 border-b border-slate-200 pb-1 text-xl font-semibold text-slate-800;
+}
+.readable h3 {
+  @apply mb-2 mt-5 text-base font-semibold text-slate-800;
+}
+.readable p {
+  @apply my-2 text-sm leading-relaxed text-slate-700;
+}
+.readable ul {
+  @apply my-2 list-disc pl-6 text-sm text-slate-700;
+}
+.readable ol {
+  @apply my-2 list-decimal pl-6 text-sm text-slate-700;
+}
+.readable li {
+  @apply my-1;
+}
+.readable a {
+  @apply text-brand hover:underline;
+}
+.readable blockquote {
+  @apply my-2 border-l-4 border-slate-200 pl-3 text-sm italic text-slate-600;
+}
+.readable table {
+  @apply my-3 w-full border-collapse text-sm;
+}
+.readable th,
+.readable td {
+  @apply border border-slate-200 px-2 py-1 text-left;
+}
+.readable th {
+  @apply bg-slate-50 font-semibold;
+}

@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+
+# The root .gitignore ignores "lib/" (Python). Our Next.js source lives in
+# frontend/lib, so re-include it here.
+!lib/
+!lib/**

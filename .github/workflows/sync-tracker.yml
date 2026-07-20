@@ -1,0 +1,53 @@
+name: Sync Dify workflow tracker
+
+on:
+  schedule:
+    # Daily at 08:00 UTC.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute and log only; do not update Confluence or post to Slack"
+        type: boolean
+        default: false
+      no_slack:
+        description: "Update Confluence but skip the Slack notification"
+        type: boolean
+        default: false
+
+# Never let two syncs run at once (they write the same Confluence page).
+concurrency:
+  group: sync-tracker
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Self-hosted runner on your network: it can reach Dify over a private
+    # network (VPN/NetBird/Tailscale), which GitHub-hosted runners cannot.
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install httpx python-dotenv beautifulsoup4
+
+      - name: Run tracker sync
+        env:
+          DIFY_ORIGIN: ${{ secrets.DIFY_ORIGIN }}
+          EMAIL: ${{ secrets.DIFY_EMAIL }}
+          PASSWORD: ${{ secrets.DIFY_PASSWORD }}
+          CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_PAGE_ID: ${{ secrets.CONFLUENCE_PAGE_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          PROJECT_LABEL: ${{ vars.PROJECT_LABEL }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ "${{ github.event.inputs.no_slack }}" = "true" ]; then ARGS="$ARGS --no-slack"; fi
+          python src/sync_tracker.py $ARGS

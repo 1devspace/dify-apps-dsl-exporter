@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "dify-console"
+version = "0.1.0"
+description = "Export, import, and govern Dify workflows: bulk DSL export/import plus a web console for ownership, environment tags, and keep/delete decisions backed by a Confluence tracker."
+authors = [
+    "1devspace",
+    "sattosan <sato.yuya1211@gmail.com>",
+]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+httpx = "^0.28.1"
+python-dotenv = "^1.0.1"
+beautifulsoup4 = "^4.12.0"
+pyyaml = "^6.0.1"
+fastapi = "^0.115.0"
+"uvicorn[standard]" = "^0.32.0"
+itsdangerous = "^2.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

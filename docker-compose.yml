@@ -1,0 +1,48 @@
+# Local-server deployment for the Dify Workflow Console.
+#
+#   cp .env.example .env   # then fill in real values + a strong SESSION_SECRET
+#   docker compose up -d --build
+#
+# Open http://<server-host>:3000
+#
+# Host networking is used so the backend can resolve/reach Dify over a private
+# network (e.g. Tailscale/NetBird/WireGuard overlay names resolve via the host). This
+# requires a Linux host — Docker Desktop on macOS/Windows does not support
+# network_mode: host. On those, see the bridge note in the README.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: dify-console-api
+    # NOTE: we deliberately do NOT use `env_file:` here. Docker's env-file parser
+    # does not strip inline comments (e.g. `KEY=value # note`), which would corrupt
+    # values like DIFY_ORIGIN. Instead we mount .env and let the app's load_dotenv()
+    # parse it (same behaviour as local dev), then override paths below.
+    environment:
+      SETTINGS_FILE: /app/data/settings.json
+      DSL_FOLDER_PATH: /app/data/dsl
+      READABLE_FOLDER_PATH: /app/data/readable
+    volumes:
+      - ./.env:/app/.env:ro
+      - appdata:/app/data
+    network_mode: host
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://127.0.0.1:8008
+    image: dify-console-web
+    environment:
+      BACKEND_URL: http://127.0.0.1:8008
+      PORT: "3000"
+    depends_on:
+      - api
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  appdata:

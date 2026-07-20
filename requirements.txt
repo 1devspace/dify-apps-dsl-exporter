@@ -1,0 +1,9 @@
+# Backend runtime dependencies (mirrors pyproject.toml). Used by Dockerfile.api.
+# For local dev with Poetry, prefer `poetry install` instead.
+httpx>=0.28.1,<0.29
+python-dotenv>=1.0.1,<2
+beautifulsoup4>=4.12.0,<5
+pyyaml>=6.0.1,<7
+fastapi>=0.115.0,<0.116
+uvicorn[standard]>=0.32.0,<0.33
+itsdangerous>=2.2.0,<3
